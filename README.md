@@ -1,2 +1,0 @@
-# Parlure
-Created by Rork
