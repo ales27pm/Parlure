@@ -10,6 +10,10 @@ struct SettingsView: View {
     @AppStorage("confirmClarification") private var confirmClarification = true
     @AppStorage("silenceMs") private var silenceMs = 1200
     @AppStorage("maxSeconds") private var maxSeconds = 30
+    @AppStorage("allowTrainingExport") private var allowTrainingExport = false
+    @AppStorage("containsPersonalData") private var containsPersonalData = true
+    @AppStorage("requireReviewBeforeExport") private var requireReviewBeforeExport = true
+    @AppStorage("exportRedactedText") private var exportRedactedText = true
 
     var body: some View {
         ZStack {
@@ -32,6 +36,16 @@ struct SettingsView: View {
                             subtitle: "Lit les réponses à voix haute",
                             isOn: $autoTTS
                         )
+                    }
+
+                    section(title: "Confidentialité & export") {
+                        ToggleRow(icon: "lock.shield.fill", title: "Autoriser l’export entraînement", subtitle: "Autorise le consentement entraînement", isOn: $allowTrainingExport)
+                        Divider().background(Theme.divider.opacity(0.5))
+                        ToggleRow(icon: "person.crop.circle.badge.exclamationmark", title: "Marquer comme données personnelles", subtitle: "Marquer sensible par défaut", isOn: $containsPersonalData)
+                        Divider().background(Theme.divider.opacity(0.5))
+                        ToggleRow(icon: "checklist", title: "Exiger révision avant export", subtitle: "Exiger une révision avant entraînement", isOn: $requireReviewBeforeExport)
+                        Divider().background(Theme.divider.opacity(0.5))
+                        ToggleRow(icon: "eye.slash", title: "Exporter le texte expurgé", subtitle: "Ajouter redacted_text quand possible", isOn: $exportRedactedText)
                     }
 
                     section(title: "Enregistrement") {

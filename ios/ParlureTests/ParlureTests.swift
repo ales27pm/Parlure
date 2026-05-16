@@ -1,17 +1,110 @@
-//
-//  ParlureTests.swift
-//  ParlureTests
-//
-//  Created by Rork on May 16, 2026.
-//
-
-import Testing
+import XCTest
 @testable import Parlure
 
-struct ParlureTests {
-
-    @Test func example() async throws {
-        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
+final class ParlureTests: XCTestCase {
+    func testPIIDetectionKinds() {
+        let text = "je m'appelle Alex, mon téléphone 514-555-1212, code H2X 1Y4, site https://qc.ca et mail a@b.com"
+        let matches = PIIRedactor.detect(text: text)
+        XCTAssertTrue(matches.contains { $0.type == "name_marker" })
+        XCTAssertTrue(matches.contains { $0.type == "phone" })
+        XCTAssertTrue(matches.contains { $0.type == "postal_code" })
+        XCTAssertTrue(matches.contains { $0.type == "url" })
+        XCTAssertTrue(matches.contains { $0.type == "email" })
     }
 
+    func testPIIRangeSafeRedactionRepeatedAndOverlap() {
+        let text = "email a@b.com puis encore a@b.com, mon adresse 123 rue Test"
+        let redacted = PIIRedactor.redact(text: text)
+        XCTAssertFalse(redacted.contains("a@b.com"))
+        XCTAssertTrue(redacted.contains("REDACTED_EMAIL"))
+    }
+
+    @MainActor
+    func testExportPolicyAndShape() throws {
+        let service = ExportService.shared
+        let turns = [
+            DialogueTurn(input: "bonjour", output: "salut", reviewStatus: .accepted, consentForTraining: true),
+            DialogueTurn(input: "secret", output: "ok", reviewStatus: .rejected, consentForTraining: true)
+        ]
+        let glossary = [GlossaryEntry(utterance: "char", unclearTerms: ["char"], explanation: "auto", reviewStatus: .pendingReview)]
+        let result = try service.export(turns: turns, glossary: glossary, options: .init(allowTrainingExport: true, markContainsPersonalData: false, requireReviewBeforeExport: true, exportRedactedText: true))
+        XCTAssertEqual(result.qfrCount, 2)
+        XCTAssertEqual(result.rejectedExcludedCount, 1)
+    }
+
+    @MainActor
+    func testQFRJSONLDecodeValidation() throws {
+        let turns = [DialogueTurn(input: "allo", output: "salut", reviewStatus: .accepted, consentForTraining: true)]
+        let glossary = [GlossaryEntry(utterance: "char", unclearTerms: ["char"], explanation: "auto", reviewStatus: .accepted, consentForTraining: true)]
+        let result = try ExportService.shared.export(turns: turns, glossary: glossary, options: .init(allowTrainingExport: true, markContainsPersonalData: false, requireReviewBeforeExport: false, exportRedactedText: false))
+
+        guard let qfrURL = result.files.first(where: { $0.lastPathComponent.contains("_qfr_import.jsonl") }) else {
+            return XCTFail("qfr import file missing")
+        }
+        let raw = try String(contentsOf: qfrURL, encoding: .utf8)
+        let lines = raw.split(separator: "\n").map(String.init).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        XCTAssertEqual(lines.count, 2)
+
+        let decoder = JSONDecoder()
+        for line in lines {
+            let data = try XCTUnwrap(line.data(using: .utf8))
+            let record = try decoder.decode(QFRImportRecord.self, from: data)
+            XCTAssertEqual(record.language, "fr-CA")
+            XCTAssertFalse(record.text.isEmpty)
+            XCTAssertFalse(record.content.isEmpty)
+            XCTAssertEqual(record.reviewStatus, "accepted")
+        }
+    }
+
+    @MainActor
+    func testTSVEscaping() {
+        let t = DialogueTurn(input: "a\tb\n", output: "c\rd")
+        let out = ExportService.shared.buildTSV(turns: [t], glossary: [])
+        XCTAssertTrue(out.contains("\\t"))
+        XCTAssertTrue(out.contains("\\n"))
+        XCTAssertTrue(out.contains("\\r"))
+    }
+
+    @MainActor
+    func testHeuristicFallback() {
+        let d = LLMService.shared.heuristicDecision(userText: "c'est rough pantoute")
+        XCTAssertEqual(d.action, .askClarify)
+        XCTAssertEqual(d.source, .heuristic)
+    }
+
+    @MainActor
+    func testExportFilenameUniqueness() throws {
+        let turns = [DialogueTurn(input: "allo", output: "salut", reviewStatus: .accepted)]
+        let glossary: [GlossaryEntry] = []
+        let first = try ExportService.shared.export(turns: turns, glossary: glossary, options: .init())
+        let second = try ExportService.shared.export(turns: turns, glossary: glossary, options: .init())
+        XCTAssertNotEqual(first.files.map(\.lastPathComponent).sorted(), second.files.map(\.lastPathComponent).sorted())
+    }
+
+    @MainActor
+    func testMetaPIICountNotInflatedByGlobalMarking() throws {
+        let turns = [DialogueTurn(input: "texte neutre", output: "réponse neutre", containsPersonalData: false, reviewStatus: .accepted)]
+        let glossary: [GlossaryEntry] = []
+        let result = try ExportService.shared.export(turns: turns, glossary: glossary, options: .init(allowTrainingExport: false, markContainsPersonalData: true, requireReviewBeforeExport: false, exportRedactedText: false))
+
+        let metaURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_meta.json") }))
+        let metaData = try Data(contentsOf: metaURL)
+        let metaObj = try JSONSerialization.jsonObject(with: metaData) as? [String: Any]
+        XCTAssertEqual(metaObj?["pii_detected_count"] as? Int, 0)
+
+        let rawURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_dialogues.raw.jsonl") }))
+        let raw = try String(contentsOf: rawURL, encoding: .utf8)
+        let firstLine = try XCTUnwrap(raw.split(separator: "\n").first)
+        let rawRecord = try JSONDecoder().decode(DialogueRawExportRecord.self, from: Data(firstLine.utf8))
+        XCTAssertTrue(rawRecord.containsPersonalData)
+    }
+
+    func testModelDefaults() {
+        let turn = DialogueTurn(input: "a", output: "b")
+        XCTAssertEqual(turn.inputLocale, "fr-CA")
+        XCTAssertEqual(turn.reviewStatus, .pendingReview)
+        let g = GlossaryEntry(utterance: "x", unclearTerms: [], explanation: "y")
+        XCTAssertEqual(g.region, "Québec")
+        XCTAssertEqual(g.reviewStatus, .pendingReview)
+    }
 }

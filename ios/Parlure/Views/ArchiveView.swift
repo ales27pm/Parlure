@@ -1,10 +1,3 @@
-//
-//  ArchiveView.swift
-//  Parlure
-//
-//  Stats, glossary review, and export.
-//
-
 import SwiftUI
 import SwiftData
 
@@ -13,135 +6,85 @@ struct ArchiveView: View {
     @Query(sort: \DialogueTurn.timestamp, order: .reverse) private var turns: [DialogueTurn]
     @Query(sort: \GlossaryEntry.timestamp, order: .reverse) private var glossary: [GlossaryEntry]
 
+    @AppStorage("allowTrainingExport") private var allowTrainingExport = false
+    @AppStorage("containsPersonalData") private var containsPersonalData = true
+    @AppStorage("requireReviewBeforeExport") private var requireReviewBeforeExport = true
+    @AppStorage("exportRedactedText") private var exportRedactedText = true
+
     @State private var shareItems: [URL] = []
     @State private var showShare = false
     @State private var exportError: String?
     @State private var showClearAlert = false
+    @State private var showExportConfirm = false
+
+    private var exportSummary: (accepted: Int, pending: Int, rejected: Int, redacted: Int, pii: Int, consented: Int, qfrExpected: Int) {
+        let allStatuses = turns.map(\.reviewStatus) + glossary.map(\.reviewStatus)
+        let accepted = allStatuses.filter { $0 == .accepted }.count
+        let pending = allStatuses.filter { $0 == .pendingReview }.count
+        let rejected = allStatuses.filter { $0 == .rejected }.count
+        let redacted = allStatuses.filter { $0 == .redacted }.count
+        let pii = turns.filter(\.containsPersonalData).count + glossary.filter(\.containsPersonalData).count
+        let consented = allowTrainingExport
+            ? turns.filter { $0.consentForTraining && $0.reviewStatus == .accepted }.count
+                + glossary.filter { $0.consentForTraining && $0.reviewStatus == .accepted }.count
+            : 0
+        let qfrExpected = turns.filter { $0.reviewStatus != .rejected }.count + glossary.filter { $0.reviewStatus != .rejected }.count
+        return (accepted, pending, rejected, redacted, pii, consented, qfrExpected)
+    }
 
     var body: some View {
         ZStack {
             Theme.paperBackground()
             ScrollView {
-                VStack(spacing: 22) {
-                    header
-
-                    HStack(spacing: 12) {
-                        StatCard(label: "Tours", value: turns.count, icon: "bubble.left.and.bubble.right.fill", accent: Theme.mapleRed)
-                        StatCard(label: "Glossaire", value: glossary.count, icon: "book.fill", accent: Theme.moss)
-                    }
-                    .padding(.horizontal, 20)
-
-                    if !glossary.isEmpty {
-                        glossarySection
-                    }
-
-                    if !turns.isEmpty {
-                        recentDialoguesSection
-                    }
-
+                VStack(spacing: 16) {
+                    Text("Archive").font(.serif(34, weight: .bold)).foregroundStyle(Theme.ink).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20)
+                    summaryCard
+                    ForEach(turns) { turn in DialogueReviewRow(turn: turn, onSave: saveContext) }
+                    ForEach(glossary) { entry in GlossaryReviewRow(entry: entry, onSave: saveContext) }
                     actions
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 20)
-                }
+                }.padding(.bottom, 24)
             }
         }
-        .sheet(isPresented: $showShare) {
-            ShareSheet(items: shareItems)
-        }
+        .sheet(isPresented: $showShare) { ShareSheet(items: shareItems) }
+        .confirmationDialog("Confirmer l'export local", isPresented: $showExportConfirm) {
+            Button("Exporter maintenant") { exportNow() }
+            Button("Annuler", role: .cancel) {}
+        } message: { Text("Données possiblement personnelles. Révision/rédaction recommandée avant entraînement.") }
+        .alert("Erreur", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) { Button("OK") { exportError = nil } } message: { Text(exportError ?? "") }
         .alert("Effacer l'archive ?", isPresented: $showClearAlert) {
             Button("Effacer", role: .destructive) { clearAll() }
             Button("Annuler", role: .cancel) {}
-        } message: {
-            Text("Cela supprimera tous les dialogues et le glossaire de l'appareil.")
-        }
-        .alert("Erreur d'export", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
-            Button("OK") { exportError = nil }
-        } message: { Text(exportError ?? "") }
+        } message: { Text("Cela supprimera tous les dialogues et le glossaire.") }
     }
 
-    private var header: some View {
-        VStack(spacing: 4) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Archive")
-                        .font(.serif(34, weight: .bold))
-                        .foregroundStyle(Theme.ink)
-                    Text("ce que tu as construit")
-                        .font(.serif(13))
-                        .italic()
-                        .foregroundStyle(Theme.inkSoft)
-                }
-                Spacer()
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 10)
-            Rectangle().fill(Theme.divider.opacity(0.6)).frame(height: 1).padding(.top, 12)
+    private var summaryCard: some View {
+        let s = exportSummary
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Résumé export").font(.serif(16, weight: .bold))
+            Text("Dialogues: \(turns.count) • Glossaire: \(glossary.count)")
+            Text("Acceptés: \(s.accepted) • En attente: \(s.pending) • Rejetés: \(s.rejected) • Caviardés: \(s.redacted)")
+            Text("PII détecté: \(s.pii) • Consentis: \(s.consented) • QFR attendu: \(s.qfrExpected)")
         }
-    }
-
-    private var glossarySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SectionTitle(title: "Glossaire", subtitle: "expressions apprises")
-            VStack(spacing: 10) {
-                ForEach(glossary.prefix(8)) { entry in
-                    GlossaryRow(entry: entry)
-                }
-            }
-        }
-        .padding(.horizontal, 20)
-    }
-
-    private var recentDialoguesSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SectionTitle(title: "Dialogues", subtitle: "tours récents")
-            VStack(spacing: 10) {
-                ForEach(turns.prefix(6)) { turn in
-                    DialogueRow(turn: turn)
-                }
-            }
-        }
-        .padding(.horizontal, 20)
+        .font(.serif(13)).foregroundStyle(Theme.inkSoft)
+        .padding(14).background(Theme.cream).clipShape(.rect(cornerRadius: 12)).padding(.horizontal, 20)
     }
 
     private var actions: some View {
         VStack(spacing: 10) {
-            Button(action: exportNow) {
-                HStack {
-                    Image(systemName: "square.and.arrow.up.fill")
-                    Text("Exporter pour entraînement")
-                }
-                .font(.serif(16, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(Theme.mapleRed)
-                .clipShape(.rect(cornerRadius: 14))
-            }
-            .disabled(turns.isEmpty && glossary.isEmpty)
-            .opacity(turns.isEmpty && glossary.isEmpty ? 0.4 : 1)
+            Button("Exporter pour entraînement") { showExportConfirm = true }
+                .font(.serif(16, weight: .semibold)).foregroundStyle(.white).frame(maxWidth: .infinity).padding(.vertical, 14).background(Theme.mapleRed).clipShape(.rect(cornerRadius: 12))
+            Button("Tout effacer", role: .destructive) { showClearAlert = true }
+                .font(.serif(14, weight: .semibold)).frame(maxWidth: .infinity).padding(.vertical, 12)
+        }.padding(.horizontal, 20)
+    }
 
-            Button {
-                showClearAlert = true
-            } label: {
-                HStack {
-                    Image(systemName: "trash")
-                    Text("Tout effacer")
-                }
-                .font(.serif(15, weight: .medium))
-                .foregroundStyle(Theme.mapleRedDeep)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Theme.mapleRed.opacity(0.08))
-                .clipShape(.rect(cornerRadius: 12))
-            }
-            .disabled(turns.isEmpty && glossary.isEmpty)
-            .opacity(turns.isEmpty && glossary.isEmpty ? 0.4 : 1)
-        }
+    private func saveContext() {
+        do { try modelContext.save() } catch { exportError = error.localizedDescription }
     }
 
     private func exportNow() {
         do {
-            let result = try ExportService.shared.export(turns: turns, glossary: glossary)
+            let result = try ExportService.shared.export(turns: turns, glossary: glossary, options: .init(allowTrainingExport: allowTrainingExport, markContainsPersonalData: containsPersonalData, requireReviewBeforeExport: requireReviewBeforeExport, exportRedactedText: exportRedactedText))
             shareItems = result.files
             showShare = true
         } catch {
@@ -150,111 +93,48 @@ struct ArchiveView: View {
     }
 
     private func clearAll() {
-        for t in turns { modelContext.delete(t) }
-        for g in glossary { modelContext.delete(g) }
-        try? modelContext.save()
+        turns.forEach(modelContext.delete)
+        glossary.forEach(modelContext.delete)
+        saveContext()
     }
 }
 
-private struct SectionTitle: View {
-    let title: String
-    let subtitle: String
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title.uppercased())
-                .font(.serif(12, weight: .bold))
-                .tracking(2)
-                .foregroundStyle(Theme.mapleRed)
-            Text(subtitle)
-                .font(.serif(13))
-                .italic()
-                .foregroundStyle(Theme.inkSoft)
-        }
-    }
-}
-
-private struct StatCard: View {
-    let label: String
-    let value: Int
-    let icon: String
-    let accent: Color
+private struct DialogueReviewRow: View {
+    @Bindable var turn: DialogueTurn
+    let onSave: () -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: icon)
-                    .font(.system(size: 18))
-                    .foregroundStyle(accent)
-                Spacer()
-            }
-            Text("\(value)")
-                .font(.serif(40, weight: .bold))
-                .foregroundStyle(Theme.ink)
-            Text(label.uppercased())
-                .font(.serif(11, weight: .semibold))
-                .tracking(1.5)
-                .foregroundStyle(Theme.inkSoft)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(Theme.cream)
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.divider.opacity(0.5), lineWidth: 1))
-        .clipShape(.rect(cornerRadius: 16))
+            Text(turn.input).font(.serif(14)).lineLimit(2)
+            Text(turn.output).font(.serif(13)).italic().foregroundStyle(Theme.inkSoft).lineLimit(2)
+            Picker("Statut", selection: $turn.reviewStatusRaw) {
+                ForEach(ReviewStatus.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) }
+            }.pickerStyle(.menu)
+            Toggle("Consentement entraînement", isOn: $turn.consentForTraining).onChange(of: turn.consentForTraining) { _, _ in onSave() }
+            Text(turn.containsPersonalData ? "PII: oui" : "PII: non").font(.serif(12)).foregroundStyle(.secondary)
+        }.padding(12).background(Theme.cream).clipShape(.rect(cornerRadius: 10)).padding(.horizontal, 20)
+        .onChange(of: turn.reviewStatusRaw) { _, _ in onSave() }
     }
 }
 
-private struct GlossaryRow: View {
-    let entry: GlossaryEntry
+private struct GlossaryReviewRow: View {
+    @Bindable var entry: GlossaryEntry
+    let onSave: () -> Void
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("« \(entry.utterance) »")
-                .font(.serif(16, weight: .semibold))
-                .foregroundStyle(Theme.ink)
-            Text(entry.explanation)
-                .font(.serif(14))
-                .italic()
-                .foregroundStyle(Theme.inkSoft)
-                .lineLimit(3)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Theme.cream)
-        .overlay(
-            HStack {
-                Rectangle().fill(Theme.mapleRed).frame(width: 3)
-                Spacer()
-            }
-        )
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.divider.opacity(0.5), lineWidth: 1))
-        .clipShape(.rect(cornerRadius: 12))
-    }
-}
-
-private struct DialogueRow: View {
-    let turn: DialogueTurn
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(turn.input)
-                .font(.serif(15))
-                .foregroundStyle(Theme.ink)
-                .lineLimit(2)
-            Text(turn.output)
-                .font(.serif(13))
-                .italic()
-                .foregroundStyle(Theme.inkSoft)
-                .lineLimit(2)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Theme.cream.opacity(0.7))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.divider.opacity(0.4), lineWidth: 1))
-        .clipShape(.rect(cornerRadius: 10))
+        VStack(alignment: .leading, spacing: 8) {
+            Text("« \(entry.utterance) »").font(.serif(14, weight: .semibold)).lineLimit(2)
+            Text(entry.explanation).font(.serif(13)).italic().foregroundStyle(Theme.inkSoft).lineLimit(2)
+            Picker("Statut", selection: $entry.reviewStatusRaw) {
+                ForEach(ReviewStatus.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) }
+            }.pickerStyle(.menu)
+            Toggle("Consentement entraînement", isOn: $entry.consentForTraining).onChange(of: entry.consentForTraining) { _, _ in onSave() }
+            Text(entry.containsPersonalData ? "PII: oui" : "PII: non").font(.serif(12)).foregroundStyle(.secondary)
+        }.padding(12).background(Theme.cream).clipShape(.rect(cornerRadius: 10)).padding(.horizontal, 20)
+        .onChange(of: entry.reviewStatusRaw) { _, _ in onSave() }
     }
 }
 
 private struct ShareSheet: UIViewControllerRepresentable {
     let items: [URL]
-    nonisolated func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
+    nonisolated func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: items, applicationActivities: nil) }
     nonisolated func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

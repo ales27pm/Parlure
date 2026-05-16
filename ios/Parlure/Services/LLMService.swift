@@ -1,93 +1,66 @@
-//
-//  LLMService.swift
-//  Parlure
-//
-//  Uses Foundation Models (iOS 26+) for on-device decisions.
-//  Provides a heuristic fallback for older OS versions.
-//
-
 import Foundation
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
 
-enum LLMAction: String {
-    case answer
-    case askClarify
-}
-
-struct LLMDecision {
-    var action: LLMAction
-    var response: String
-    var unclearTerms: [String]
-}
+enum DecisionSource: String, Codable { case foundationModels, heuristic, glossary }
+enum LLMAction: String { case answer, askClarify }
+struct LLMDecision { var action: LLMAction; var response: String; var unclearTerms: [String]; var source: DecisionSource }
 
 @MainActor
 final class LLMService {
     static let shared = LLMService()
 
-    private let instructions = """
-    Tu es un assistant bilingue spécialisé en français québécois et ses expressions idiomatiques.
-    Si tu n'es pas certain d'une expression, demande gentiment des précisions.
-    Sinon, réponds de façon courte, chaleureuse, et naturelle en français québécois.
-    Identifie clairement tout terme ou expression que tu ne comprends pas dans `unclearTerms`.
-    """
-
     func decide(history: [ChatMessage], userText: String, glossaryHint: String?) async -> LLMDecision {
-        if #available(iOS 26.0, *) {
-            return await decideWithFoundationModels(history: history, userText: userText, glossaryHint: glossaryHint)
+        if let glossaryHint, !glossaryHint.isEmpty {
+            return .init(action: .answer, response: "Bonne note du glossaire: \(glossaryHint)", unclearTerms: [], source: .glossary)
         }
-        return heuristicDecision(userText: userText, glossaryHint: glossaryHint)
+        if #available(iOS 26.0, *), let fm = await decideWithFM(history: history, userText: userText) {
+            return fm
+        }
+        return heuristicDecision(userText: userText)
     }
 
+#if canImport(FoundationModels)
     @available(iOS 26.0, *)
-    private func decideWithFoundationModels(history: [ChatMessage], userText: String, glossaryHint: String?) async -> LLMDecision {
-        guard SystemLanguageModel.default.isAvailable else {
-            return heuristicDecision(userText: userText, glossaryHint: glossaryHint)
-        }
+    private func decideWithFM(history: [ChatMessage], userText: String) async -> LLMDecision? {
+        guard SystemLanguageModel.default.isAvailable else { return nil }
+        let session = LanguageModelSession(instructions: { "Réponds en français québécois, court et naturel." })
+        let context = history.suffix(6).map {
+            "\($0.role == .user ? "U" : "A"): \($0.content)"
+        }.joined(separator: "\n")
+        let prompt = """
+        Conversation récente:
+        \(context)
 
-        let session = LanguageModelSession(instructions: { instructions })
-        let context = history.suffix(6).map { "\($0.role == .user ? "U" : "A"): \($0.content)" }.joined(separator: "\n")
+        Utilisateur: \(userText)
 
-        var prompt = "Conversation récente:\n\(context)\n\nUtilisateur: \(userText)"
-        if let hint = glossaryHint, !hint.isEmpty {
-            prompt += "\n\nIndice du glossaire (déjà appris par l'utilisateur): \(hint)"
-        }
-
+        Retourne action/réponse/unclearTerms.
+        """
         do {
-            let response = try await session.respond(to: prompt, generating: GeneratedDecision.self)
-            let d = response.content
-            let action: LLMAction = d.action.lowercased().contains("clarify") ? .askClarify : .answer
-            return LLMDecision(action: action, response: d.response, unclearTerms: d.unclearTerms)
+            let r = try await session.respond(to: prompt, generating: GeneratedDecision.self)
+            let action: LLMAction = r.content.action.lowercased().contains("clar") ? .askClarify : .answer
+            return .init(action: action, response: r.content.response, unclearTerms: r.content.unclearTerms, source: .foundationModels)
         } catch {
-            return heuristicDecision(userText: userText, glossaryHint: glossaryHint)
+            return nil
         }
     }
+#else
+    @available(iOS 26.0, *)
+    private func decideWithFM(history: [ChatMessage], userText: String) async -> LLMDecision? {
+        nil
+    }
+#endif
 
-    private func heuristicDecision(userText: String, glossaryHint: String?) -> LLMDecision {
-        let known: Set<String> = [
-            "bonjour", "salut", "allo", "merci", "oui", "non", "ça va",
-            "comment", "quoi", "où", "qui", "quand", "pourquoi", "comment ça va"
-        ]
-        let normalized = userText.lowercased()
-        let isCommon = known.contains(where: { normalized.contains($0) })
-
-        if let hint = glossaryHint {
-            return LLMDecision(action: .answer, response: "D'après ton glossaire: \(hint)", unclearTerms: [])
+    func heuristicDecision(userText: String) -> LLMDecision {
+        let lower = userText.lowercased()
+        let idiomSignals = ["ça a pas d'allure", "pantoute", "char", "magasiner", "c'est rough", "donne-moi une break"]
+        if idiomSignals.contains(where: { lower.contains($0) }) {
+            return .init(action: .askClarify, response: "Je veux bien capter le sens québécois exact—tu peux me l'expliquer en une phrase?", unclearTerms: idiomSignals.filter { lower.contains($0) }, source: .heuristic)
         }
-
-        if isCommon || userText.split(separator: " ").count <= 2 {
-            return LLMDecision(
-                action: .answer,
-                response: "Allô ! Continue, j'enregistre tes expressions québécoises.",
-                unclearTerms: []
-            )
+        if userText.split(separator: " ").count <= 2 {
+            return .init(action: .answer, response: "Parfait, continue. Je t'écoute.", unclearTerms: [], source: .heuristic)
         }
-
-        return LLMDecision(
-            action: .askClarify,
-            response: "Peux-tu m'expliquer cette expression dans tes propres mots ?",
-            unclearTerms: []
-        )
+        return .init(action: .answer, response: "Merci! C'est noté en fr-CA. Continue quand tu veux.", unclearTerms: [], source: .heuristic)
     }
 }
