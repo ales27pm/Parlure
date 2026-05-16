@@ -33,13 +33,13 @@ USAGE
 }
 
 ascii_banner() { cat <<'ART'
-╔══════════════════════════════════════════════════════════════════════════════╗
-║    APPLE DEVELOPER AIO DEPLOYMENT • SIGNING • BUILD • PUBLISH • METRICS     ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║   [▒▒▒▒▒▒▒▒▒▒] init   -> defaults + secure config                            ║
-║   [▒▒▒▒▒▒▒▒▒▒] build  -> resolve deps + archive + export ipa                 ║
-║   [▒▒▒▒▒▒▒▒▒▒] upload -> app store connect publish                           ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════╗
+║    APPLE DEVELOPER AIO DEPLOYMENT • SIGNING • BUILD • METRICS   ║
+╠══════════════════════════════════════════════════════════════════╣
+║   [··········] init   -> defaults + secure config               ║
+║   [··········] build  -> resolve deps + archive + export ipa    ║
+║   [··········] upload -> app store connect publish              ║
+╚══════════════════════════════════════════════════════════════════╝
 ART
 }
 
@@ -64,12 +64,12 @@ emit_metrics() {
   local elapsed=$(( $(date +%s) - START_TS ))
   cat <<EOF_METRIC
 
-┌─────────────────────────── run metrics ───────────────────────────┐
+┌──────────────────────────── run metrics ─────────────────────────────┐
 │ steps completed : ${METRICS_STEPS_DONE}/${METRICS_STEPS_TOTAL}
 │ elapsed seconds : ${elapsed}
 │ action          : ${CURRENT_ACTION}
 │ config file     : ${CONFIG_FILE}
-└────────────────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────────────┘
 EOF_METRIC
 }
 
@@ -99,10 +99,16 @@ ensure_config_dir() {
   chmod 700 "$(dirname "$CONFIG_FILE")"
 }
 
+# Store a key=value pair. Values can contain '=' and are safe from backslash interpretation.
 save_kv() {
   local key="$1" value="$2"
+  export AWK_KEY="$key" AWK_VALUE="$value"
   touch "$CONFIG_FILE"
-  awk -F= -v k="$key" -v v="$value" 'BEGIN{u=0} $1==k{print k"="v;u=1;next} {print} END{if(!u) print k"="v}' "$CONFIG_FILE" > "$CONFIG_FILE.tmp"
+  awk 'BEGIN { FS="="; OFS="="; updated=0 }
+       $1==ENVIRON["AWK_KEY"] { print $1, ENVIRON["AWK_VALUE"]; updated=1; next }
+       { print }
+       END { if (!updated) print ENVIRON["AWK_KEY"], ENVIRON["AWK_VALUE"] }' \
+       "$CONFIG_FILE" > "$CONFIG_FILE.tmp"
   mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
   chmod 600 "$CONFIG_FILE"
 }
@@ -130,12 +136,14 @@ prompt_if_empty() {
   fi
 }
 
+# Load config file. Splits only on the first '=', allowing values to contain '='.
 load_config() {
   if [[ -f "$CONFIG_FILE" ]]; then
     while IFS='=' read -r raw_key raw_val; do
       [[ -z "${raw_key}" ]] && continue
       [[ "${raw_key}" =~ ^[[:space:]]*# ]] && continue
-      local key="${raw_key//[[:space:]]/}"
+      # Strip any trailing whitespace/carriage return from key
+      local key="${raw_key//[$'\t\r ']/}"
       local val="${raw_val:-}"
       case "$key" in
         WORKSPACE|SCHEME|CONFIGURATION|TEAM_ID|BUNDLE_ID|EXPORT_PATH|ARCHIVE_PATH|APP_STORE_KEY_ID|APP_STORE_ISSUER_ID|APP_STORE_KEY_PATH)
@@ -163,7 +171,8 @@ PLIST
 }
 
 cmd_init() {
-  METRICS_STEPS_TOTAL=4
+  # Only set total steps if NOT part of 'all' pipeline
+  [[ "${CURRENT_ACTION}" != all:* ]] && METRICS_STEPS_TOTAL=4
   ascii_banner
   ensure_config_dir
   touch "$CONFIG_FILE" && chmod 600 "$CONFIG_FILE"
@@ -194,7 +203,7 @@ cmd_init() {
 }
 
 cmd_build() {
-  METRICS_STEPS_TOTAL=6
+  [[ "${CURRENT_ACTION}" != all:* ]] && METRICS_STEPS_TOTAL=6
   load_config
   prompt_if_empty WORKSPACE "Xcode workspace (.xcworkspace path)"
   prompt_if_empty SCHEME "Xcode scheme"
@@ -229,7 +238,7 @@ cmd_build() {
 }
 
 cmd_publish() {
-  METRICS_STEPS_TOTAL=4
+  [[ "${CURRENT_ACTION}" != all:* ]] && METRICS_STEPS_TOTAL=4
   load_config
   prompt_if_empty EXPORT_PATH "Export IPA directory" "build/export"
   prompt_if_empty APP_STORE_KEY_ID "App Store Connect API Key ID"
@@ -271,17 +280,44 @@ main() {
   done
 
   ensure_tools
+
   case "$action" in
-    init) CURRENT_ACTION="init"; cmd_init ;;
-    build) CURRENT_ACTION="build"; cmd_build ;;
-    publish) CURRENT_ACTION="publish"; cmd_publish ;;
+    init)
+      CURRENT_ACTION="init"
+      cmd_init
+      ;;
+    build)
+      CURRENT_ACTION="build"
+      cmd_build
+      ;;
+    publish)
+      CURRENT_ACTION="publish"
+      cmd_publish
+      ;;
     all)
-      CURRENT_ACTION="all:init"; [[ -f "$CONFIG_FILE" ]] || cmd_init
-      CURRENT_ACTION="all:build"; cmd_build
-      CURRENT_ACTION="all:publish"; cmd_publish
+      # Determine total steps for the full pipeline
+      if [[ -f "$CONFIG_FILE" ]]; then
+        METRICS_STEPS_TOTAL=$(( 6 + 4 ))   # build + publish
+      else
+        METRICS_STEPS_TOTAL=$(( 4 + 6 + 4 ))   # init + build + publish
+      fi
+      METRICS_STEPS_DONE=0
+
+      CURRENT_ACTION="all:init"
+      [[ -f "$CONFIG_FILE" ]] || cmd_init
+
+      CURRENT_ACTION="all:build"
+      cmd_build
+
+      CURRENT_ACTION="all:publish"
+      cmd_publish
       ;;
     help|--help|-h) usage ;;
-    *) err "Unknown action: $action"; usage; exit 1 ;;
+    *)
+      err "Unknown action: $action"
+      usage
+      exit 1
+      ;;
   esac
 
   emit_metrics
