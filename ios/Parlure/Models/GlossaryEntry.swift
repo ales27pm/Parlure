@@ -5,16 +5,16 @@ enum GlossarySource: String, Codable, CaseIterable { case userClarification = "u
 
 @Model
 final class GlossaryEntry {
-    @Attribute(.unique) var id: UUID
-    var timestamp: Date
-    var utterance: String
-    var unclearTerms: [String]
-    var explanation: String
-    var region: String
-    var sourceRaw: String
-    var reviewStatusRaw: String
-    var containsPersonalData: Bool
-    var consentForTraining: Bool
+    @Attribute(.unique) var id: UUID = UUID()
+    var timestamp: Date = Date()
+    var utterance: String = ""
+    var unclearTerms: [String] = []
+    var explanation: String = ""
+    var region: String = "Québec"
+    var sourceRaw: String = GlossarySource.userClarification.rawValue
+    var reviewStatusRaw: String = ReviewStatus.pendingReview.rawValue
+    var containsPersonalData: Bool = true
+    var consentForTraining: Bool = false
     var notes: String?
 
     var source: GlossarySource { get { GlossarySource(rawValue: sourceRaw) ?? .userClarification } set { sourceRaw = newValue.rawValue } }

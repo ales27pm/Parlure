@@ -1,35 +1,32 @@
 # Parlure iOS
 
-Parlure est une app iOS locale pour capter la parole en français québécois (fr-CA), conserver les dialogues/glossaire, puis exporter des jeux de données pour `Quec-fr-CA-llm-training`.
+Parlure est une application iOS locale pour capter la parole en français québécois (fr-CA), conserver dialogues + clarifications, puis exporter des données vers `Quec-fr-CA-llm-training`.
 
-## Confidentialité
-- 100% local: pas de cloud.
-- Export marqué sensible par défaut.
-- Révision recommandée avant tout usage entraînement.
-- Réponses assistant = composante synthétique.
+## Confidentialité et révision
+- 100% local (aucun service cloud ajouté).
+- Statuts de révision: `pending_review`, `accepted`, `rejected`, `redacted`.
+- Règle de consentement entraînement:
+  - `consent_for_training = true` **seulement si** export global autorisé + consentement item activé + statut `accepted`.
+- Politique d’export:
+  - Raw exports incluent **tous** les enregistrements (incluant rejetés).
+  - QFR import JSONL exclut les enregistrements `rejected`.
+  - Les champs PII et `redacted_text` sont produits localement.
 
-## Exigences
-- Xcode récent (target iOS 18+).
-- Speech + microphone permissions.
-- FoundationModels est optionnel et strictement gardé par disponibilité.
+## Build/Test
+- Build:
+  - `cd ios && xcodebuild -project Parlure.xcodeproj -scheme Parlure -destination 'platform=iOS Simulator,name=iPhone 16' build`
+- Tests:
+  - `cd ios && xcodebuild test -project Parlure.xcodeproj -scheme Parlure -destination 'platform=iOS Simulator,name=iPhone 16'`
 
-## Build
-1. Ouvrir `ios/Parlure.xcodeproj`.
-2. Choisir un simulateur/appareil iOS.
-3. Build & Run.
-
-## Formats d’export
-- `parlure_<ts>_dialogues.raw.jsonl`
-- `parlure_<ts>_glossary.raw.jsonl`
-- `parlure_<ts>_qfr_import.jsonl`
-- `parlure_<ts>_parallel.tsv`
-- `parlure_<ts>_meta.json`
-
-## Import vers Quec-fr-CA-llm-training
-Utiliser `*_qfr_import.jsonl` (champs `text` et `content` inclus), puis filtrer selon `review_status`, `consent_for_training`, et flags PII.
+## Exports produits
+- `parlure_<timestamp>_dialogues.raw.jsonl`
+- `parlure_<timestamp>_glossary.raw.jsonl`
+- `parlure_<timestamp>_qfr_import.jsonl`
+- `parlure_<timestamp>_parallel.tsv`
+- `parlure_<timestamp>_meta.json`
 
 ## Limites connues
-- Disponibilité Speech varie selon appareil/locale.
-- FoundationModels n’est pas universel.
-- Les exports demandent révision/redaction avant entraînement.
-- Sorties synthétiques ne doivent pas être traitées comme corpus humain pur.
+- La disponibilité Speech dépend de l’appareil/locale.
+- FoundationModels est optionnel et seulement sur plateformes supportées.
+- Réviser/rédiger les données avant usage d’entraînement production/commercial.
+- Les réponses assistant sont synthétiques, pas un corpus humain pur.

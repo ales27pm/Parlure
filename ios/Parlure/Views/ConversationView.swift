@@ -27,6 +27,8 @@ struct ConversationView: View {
     @State private var showConfirmSheet = false
     @State private var statusText: String = "Prêt à écouter"
     @State private var errorBanner: String?
+    @State private var activeRecordingID: UUID?
+    @State private var processedRecordingIDs: Set<UUID> = []
 
     var body: some View {
         ZStack {
@@ -95,6 +97,8 @@ struct ConversationView: View {
 
     // MARK: - Header
 
+    private var recognitionBadge: String { "\(speech.recognizerLocale) • \(speech.usesOnDeviceRecognition ? "sur appareil" : "assisté")" }
+
     private var header: some View {
         VStack(spacing: 4) {
             HStack {
@@ -108,7 +112,10 @@ struct ConversationView: View {
                         .foregroundStyle(Theme.inkSoft)
                 }
                 Spacer()
-                StatusPill(mode: mode, text: statusText)
+                VStack(alignment: .trailing, spacing: 6) {
+                    StatusPill(mode: mode, text: statusText)
+                    Text(recognitionBadge).font(.serif(11)).foregroundStyle(Theme.inkSoft)
+                }
             }
             .padding(.horizontal, 20)
             .padding(.top, 10)
@@ -216,16 +223,19 @@ struct ConversationView: View {
 
     private func toggleRecording() async {
         if mode == .recording {
-            speech.stop()
-            await processUserUtterance()
+            let text = speech.stopAndReturnTranscript()
+            if let id = activeRecordingID { await processUserUtterance(text: text, recordingID: id) }
             return
         }
         guard mode == .idle else { return }
         do {
+            TTSService.shared.stop()
+            let recordingID = UUID()
+            activeRecordingID = recordingID
             mode = .recording
             statusText = "À l'écoute…"
-            try await speech.start(silenceThresholdMs: silenceMs, maxSeconds: maxSeconds) {
-                Task { await processUserUtterance() }
+            try await speech.start(silenceThresholdMs: silenceMs, maxSeconds: maxSeconds) { text in
+                Task { await processUserUtterance(text: text, recordingID: recordingID) }
             }
         } catch {
             mode = .idle
@@ -234,8 +244,10 @@ struct ConversationView: View {
         }
     }
 
-    private func processUserUtterance() async {
-        let text = speech.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func processUserUtterance(text: String, recordingID: UUID) async {
+        guard !processedRecordingIDs.contains(recordingID) else { return }
+        processedRecordingIDs.insert(recordingID)
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             mode = .idle
             statusText = "Rien capté — réessaie"
@@ -277,16 +289,19 @@ struct ConversationView: View {
 
     private func toggleClarificationRecording() async {
         if mode == .clarificationRecording {
-            speech.stop()
-            await processClarification()
+            let text = speech.stopAndReturnTranscript()
+            if let id = activeRecordingID { await processClarification(text: text, recordingID: id) }
             return
         }
         guard mode == .clarifying else { return }
         do {
+            TTSService.shared.stop()
+            let recordingID = UUID()
+            activeRecordingID = recordingID
             mode = .clarificationRecording
             statusText = "À l'écoute…"
-            try await speech.start(silenceThresholdMs: silenceMs, maxSeconds: maxSeconds) {
-                Task { await processClarification() }
+            try await speech.start(silenceThresholdMs: silenceMs, maxSeconds: maxSeconds) { text in
+                Task { await processClarification(text: text, recordingID: recordingID) }
             }
         } catch {
             mode = .clarifying
@@ -294,8 +309,10 @@ struct ConversationView: View {
         }
     }
 
-    private func processClarification() async {
-        let text = speech.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func processClarification(text: String, recordingID: UUID) async {
+        guard !processedRecordingIDs.contains(recordingID) else { return }
+        processedRecordingIDs.insert(recordingID)
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, pending != nil else {
             mode = .clarifying
             return

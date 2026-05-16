@@ -14,18 +14,18 @@ enum ReviewStatus: String, Codable, CaseIterable {
 
 @Model
 final class DialogueTurn {
-    @Attribute(.unique) var id: UUID
-    var timestamp: Date
-    var input: String
-    var output: String
-    var inputLocale: String
-    var recognizerLocale: String
-    var outputSourceRaw: String
-    var glossaryHintUsed: Bool
+    @Attribute(.unique) var id: UUID = UUID()
+    var timestamp: Date = Date()
+    var input: String = ""
+    var output: String = ""
+    var inputLocale: String = "fr-CA"
+    var recognizerLocale: String = "fr-CA"
+    var outputSourceRaw: String = OutputSource.heuristic.rawValue
+    var glossaryHintUsed: Bool = false
     var audioFilename: String?
-    var reviewStatusRaw: String
-    var containsPersonalData: Bool
-    var consentForTraining: Bool
+    var reviewStatusRaw: String = ReviewStatus.pendingReview.rawValue
+    var containsPersonalData: Bool = true
+    var consentForTraining: Bool = false
     var notes: String?
 
     var outputSource: OutputSource {

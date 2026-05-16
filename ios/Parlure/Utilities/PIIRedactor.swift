@@ -3,6 +3,7 @@ import Foundation
 struct PIIMatch: Equatable {
     let type: String
     let value: String
+    let range: NSRange
 }
 
 enum PIIRedactor {
@@ -18,22 +19,42 @@ enum PIIRedactor {
     ]
 
     static func detect(text: String) -> [PIIMatch] {
-        patterns.flatMap { type, pattern in
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
-            let ns = text as NSString
-            return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map {
-                PIIMatch(type: type, value: ns.substring(with: $0.range))
+        let nsText = text as NSString
+        var out: [PIIMatch] = []
+        for (type, pattern) in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+            let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+            for match in matches {
+                out.append(PIIMatch(type: type, value: nsText.substring(with: match.range), range: match.range))
             }
         }
+        return out.sorted { $0.range.location < $1.range.location }
     }
 
-    static func containsPII(text: String) -> Bool { !detect(text: text).isEmpty }
+    static func containsPII(text: String) -> Bool {
+        !detect(text: text).isEmpty
+    }
 
     static func redact(text: String) -> String {
-        var result = text
-        for m in detect(text: text).sorted(by: { $0.value.count > $1.value.count }) {
-            result = result.replacingOccurrences(of: m.value, with: "[REDACTED_\(m.type.uppercased())]")
+        let matches = nonOverlapping(matches: detect(text: text))
+        guard !matches.isEmpty else { return text }
+
+        let mutable = NSMutableString(string: text)
+        for match in matches.sorted(by: { $0.range.location > $1.range.location }) {
+            mutable.replaceCharacters(in: match.range, with: "[REDACTED_\(match.type.uppercased())]")
         }
-        return result
+        return mutable as String
+    }
+
+    private static func nonOverlapping(matches: [PIIMatch]) -> [PIIMatch] {
+        var accepted: [PIIMatch] = []
+        for m in matches.sorted(by: {
+            if $0.range.location == $1.range.location { return $0.range.length > $1.range.length }
+            return $0.range.location < $1.range.location
+        }) {
+            if accepted.contains(where: { NSIntersectionRange($0.range, m.range).length > 0 }) { continue }
+            accepted.append(m)
+        }
+        return accepted
     }
 }
