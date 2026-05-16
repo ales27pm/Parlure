@@ -5,6 +5,7 @@
 
 import SwiftUI
 import SwiftData
+import Observation
 
 struct ConversationView: View {
     @Environment(\.modelContext) private var modelContext
@@ -264,9 +265,9 @@ struct ConversationView: View {
             withAnimation { messages.append(ChatMessage(role: .assistant, content: responseText)) }
             if autoTTS { TTSService.shared.speak(responseText) }
             // Persist dialogue turn
-            let turn = DialogueTurn(input: text, output: responseText)
+            let turn = DialogueTurn(input: text, output: responseText, recognizerLocale: speech.recognizerLocale, outputSource: decision.source == .foundationModels ? .foundationModels : decision.source == .glossary ? .glossary : .heuristic, glossaryHintUsed: hint != nil, containsPersonalData: PIIRedactor.containsPII(text: text + " " + responseText))
             modelContext.insert(turn)
-            try? modelContext.save()
+            do { try modelContext.save() } catch { errorBanner = error.localizedDescription }
             mode = .idle
             statusText = "Continue quand tu veux"
         }
@@ -319,16 +320,16 @@ struct ConversationView: View {
             explanation: pendingExplanation
         )
         modelContext.insert(entry)
-        try? modelContext.save()
+        do { try modelContext.save() } catch { errorBanner = error.localizedDescription }
 
         let thanks = "Merci ! J'ai retenu : « \(p.utterance) » — \(pendingExplanation)"
         withAnimation { messages.append(ChatMessage(role: .assistant, content: thanks)) }
         if autoTTS { TTSService.shared.speak(thanks) }
 
         // Also persist as a dialogue turn for export
-        let turn = DialogueTurn(input: p.utterance, output: pendingExplanation)
+        let turn = DialogueTurn(input: p.utterance, output: pendingExplanation, outputSource: .manual, containsPersonalData: PIIRedactor.containsPII(text: p.utterance + " " + pendingExplanation))
         modelContext.insert(turn)
-        try? modelContext.save()
+        do { try modelContext.save() } catch { errorBanner = error.localizedDescription }
 
         pending = nil
         pendingExplanation = ""

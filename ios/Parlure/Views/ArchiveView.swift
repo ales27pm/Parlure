@@ -17,6 +17,11 @@ struct ArchiveView: View {
     @State private var showShare = false
     @State private var exportError: String?
     @State private var showClearAlert = false
+    @AppStorage("allowTrainingExport") private var allowTrainingExport = false
+    @AppStorage("containsPersonalData") private var containsPersonalData = true
+    @AppStorage("requireReviewBeforeExport") private var requireReviewBeforeExport = true
+    @AppStorage("exportRedactedText") private var exportRedactedText = true
+    @State private var showExportConfirm = false
 
     var body: some View {
         ZStack {
@@ -48,6 +53,10 @@ struct ArchiveView: View {
         .sheet(isPresented: $showShare) {
             ShareSheet(items: shareItems)
         }
+        .confirmationDialog("Confirmer l'export local", isPresented: $showExportConfirm) {
+            Button("Exporter maintenant") { exportNow() }
+            Button("Annuler", role: .cancel) {}
+        } message: { Text("Les données peuvent contenir des renseignements personnels. Révise et expurge avant entraînement.") }
         .alert("Effacer l'archive ?", isPresented: $showClearAlert) {
             Button("Effacer", role: .destructive) { clearAll() }
             Button("Annuler", role: .cancel) {}
@@ -105,7 +114,7 @@ struct ArchiveView: View {
 
     private var actions: some View {
         VStack(spacing: 10) {
-            Button(action: exportNow) {
+            Button { showExportConfirm = true } label: {
                 HStack {
                     Image(systemName: "square.and.arrow.up.fill")
                     Text("Exporter pour entraînement")
@@ -141,7 +150,7 @@ struct ArchiveView: View {
 
     private func exportNow() {
         do {
-            let result = try ExportService.shared.export(turns: turns, glossary: glossary)
+            let result = try ExportService.shared.export(turns: turns, glossary: glossary, options: .init(allowTrainingExport: allowTrainingExport, markContainsPersonalData: containsPersonalData, requireReviewBeforeExport: requireReviewBeforeExport, exportRedactedText: exportRedactedText))
             shareItems = result.files
             showShare = true
         } catch {
@@ -152,7 +161,7 @@ struct ArchiveView: View {
     private func clearAll() {
         for t in turns { modelContext.delete(t) }
         for g in glossary { modelContext.delete(g) }
-        try? modelContext.save()
+        do { try modelContext.save() } catch { exportError = error.localizedDescription }
     }
 }
 
