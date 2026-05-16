@@ -101,13 +101,15 @@ ensure_config_dir() {
 
 save_kv() {
   local key="$1" value="$2"
+  touch "$CONFIG_FILE"
   awk -F= -v k="$key" -v v="$value" 'BEGIN{u=0} $1==k{print k"="v;u=1;next} {print} END{if(!u) print k"="v}' "$CONFIG_FILE" > "$CONFIG_FILE.tmp"
   mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
   chmod 600 "$CONFIG_FILE"
 }
 
 prompt_if_empty() {
-  local var_name="$1" prompt="$2" default_val="${3:-}" current="${!var_name:-}"
+  local var_name="$1" prompt="$2" default_val="${3:-}"
+  local current="${!var_name:-}"
   if [[ -z "$current" ]]; then
     if [[ "${NON_INTERACTIVE:-0}" == "1" ]]; then
       [[ -n "$default_val" ]] || {
