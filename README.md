@@ -51,7 +51,7 @@ ParlureTests valide notamment:
 
 A high-verbosity script is included at `scripts_appstore_aio.sh` to:
 
-- connect your Apple Developer delivery flow using App Store Connect API credentials,
+- connect to your Apple Developer delivery flow using App Store Connect API credentials,
 - manage signing/build defaults,
 - securely store secrets in macOS Keychain,
 - build IPA artifacts,

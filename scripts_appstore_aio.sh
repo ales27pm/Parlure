@@ -8,6 +8,7 @@ KEYCHAIN_SERVICE="parlure.appstore.aio"
 START_TS="$(date +%s)"
 METRICS_STEPS_TOTAL=0
 METRICS_STEPS_DONE=0
+CURRENT_ACTION=""
 
 log() { printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 warn() { printf '[%s] WARNING: %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >&2; }
@@ -24,9 +25,9 @@ USAGE:
   $SCRIPT_NAME all [--config <path>] [--non-interactive]
 
 DESCRIPTION:
-  init    : Persist default config and securely store optional secrets in Keychain.
+  init    : Persist default config values.
   build   : Resolve packages, archive, and export IPA.
-  publish : Upload IPA to App Store Connect.
+  publish : Upload IPA to App Store Connect via iTMSTransporter.
   all     : Run init (if needed), build, and publish.
 USAGE
 }
@@ -35,7 +36,7 @@ ascii_banner() { cat <<'ART'
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║    APPLE DEVELOPER AIO DEPLOYMENT • SIGNING • BUILD • PUBLISH • METRICS     ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
-║   [▒▒▒▒▒▒▒▒▒▒] init   -> defaults + secure keychain storage                  ║
+║   [▒▒▒▒▒▒▒▒▒▒] init   -> defaults + secure config                            ║
 ║   [▒▒▒▒▒▒▒▒▒▒] build  -> resolve deps + archive + export ipa                 ║
 ║   [▒▒▒▒▒▒▒▒▒▒] upload -> app store connect publish                           ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -47,8 +48,8 @@ progress_bar() {
   local fill=$((percent * width / 100))
   local empty=$((width - fill))
   printf '%-24s [' "$label"
-  printf '%0.s#' $(seq 1 "$fill")
-  printf '%0.s.' $(seq 1 "$empty")
+  if (( fill > 0 )); then printf '%0.s#' $(seq 1 "$fill"); fi
+  if (( empty > 0 )); then printf '%0.s.' $(seq 1 "$empty"); fi
   printf '] %3d%%\n' "$percent"
 }
 
@@ -60,33 +61,37 @@ record_step() {
 }
 
 emit_metrics() {
-  local end_ts elapsed
-  end_ts="$(date +%s)"
-  elapsed=$((end_ts - START_TS))
-  printf '\n'
+  local elapsed=$(( $(date +%s) - START_TS ))
   cat <<EOF_METRIC
+
 ┌─────────────────────────── run metrics ───────────────────────────┐
 │ steps completed : ${METRICS_STEPS_DONE}/${METRICS_STEPS_TOTAL}
 │ elapsed seconds : ${elapsed}
+│ action          : ${CURRENT_ACTION}
 │ config file     : ${CONFIG_FILE}
 └────────────────────────────────────────────────────────────────────┘
 EOF_METRIC
 }
 
-on_error() {
-  local line="$1" cmd="$2"
-  err "Failed at line ${line}: ${cmd}"
-}
+on_error() { err "Failed at line $1: $2"; }
 
 require_cmd() { command -v "$1" >/dev/null 2>&1 || { err "Missing required command: $1"; exit 1; }; }
 validate_team_id() { [[ "$1" =~ ^[A-Z0-9]{10}$ ]] || { err "TEAM_ID must be exactly 10 alphanumeric uppercase characters."; exit 1; }; }
 validate_file_exists() { [[ -f "$1" ]] || { err "Required file does not exist: $1"; exit 1; }; }
+validate_path_exists() { [[ -e "$1" ]] || { err "Required path does not exist: $1"; exit 1; }; }
+validate_parent_writable() {
+  local p="$1" d
+  d="$(dirname "$p")"
+  mkdir -p "$d"
+  [[ -w "$d" ]] || { err "Parent directory is not writable: $d (for $p)"; exit 1; }
+}
 
 ensure_tools() {
   require_cmd xcodebuild
   require_cmd security
   require_cmd xcrun
   require_cmd find
+  require_cmd iTMSTransporter
 }
 
 ensure_config_dir() {
@@ -96,27 +101,22 @@ ensure_config_dir() {
 
 save_kv() {
   local key="$1" value="$2"
-  awk -F= -v k="$key" -v v="$value" '
-    BEGIN { u=0 }
-    $1==k { print k"="v; u=1; next }
-    { print }
-    END { if (!u) print k"="v }
-  ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp"
+  awk -F= -v k="$key" -v v="$value" 'BEGIN{u=0} $1==k{print k"="v;u=1;next} {print} END{if(!u) print k"="v}' "$CONFIG_FILE" > "$CONFIG_FILE.tmp"
   mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
   chmod 600 "$CONFIG_FILE"
-}
-
-set_keychain_secret() {
-  local account="$1" secret="$2"
-  security delete-generic-password -s "$KEYCHAIN_SERVICE" -a "$account" >/dev/null 2>&1 || true
-  security add-generic-password -U -s "$KEYCHAIN_SERVICE" -a "$account" -w "$secret" >/dev/null
 }
 
 prompt_if_empty() {
   local var_name="$1" prompt="$2" default_val="${3:-}" current="${!var_name:-}"
   if [[ -z "$current" ]]; then
     if [[ "${NON_INTERACTIVE:-0}" == "1" ]]; then
-      [[ -n "$default_val" ]] || { err "Missing required value for $var_name in non-interactive mode."; exit 1; }
+      [[ -n "$default_val" ]] || {
+        local ctx="non-interactive mode"
+        [[ -n "${CURRENT_ACTION:-}" ]] && ctx+=" during '${CURRENT_ACTION}'"
+        [[ -n "${CONFIG_FILE:-}" ]] && ctx+=" (config: ${CONFIG_FILE})"
+        err "Missing required value for '${var_name}' in ${ctx}."
+        exit 1
+      }
       current="$default_val"
     elif [[ -n "$default_val" ]]; then
       read -r -p "$prompt [$default_val]: " current
@@ -130,8 +130,18 @@ prompt_if_empty() {
 
 load_config() {
   if [[ -f "$CONFIG_FILE" ]]; then
-    # shellcheck disable=SC1090
-    source "$CONFIG_FILE"
+    while IFS='=' read -r raw_key raw_val; do
+      [[ -z "${raw_key}" ]] && continue
+      [[ "${raw_key}" =~ ^[[:space:]]*# ]] && continue
+      local key="${raw_key//[[:space:]]/}"
+      local val="${raw_val:-}"
+      case "$key" in
+        WORKSPACE|SCHEME|CONFIGURATION|TEAM_ID|BUNDLE_ID|EXPORT_PATH|ARCHIVE_PATH|APP_STORE_KEY_ID|APP_STORE_ISSUER_ID|APP_STORE_KEY_PATH)
+          printf -v "$key" '%s' "$val"
+          ;;
+        *) warn "Ignoring unknown config key: $key" ;;
+      esac
+    done < "$CONFIG_FILE"
   fi
 }
 
@@ -151,7 +161,7 @@ PLIST
 }
 
 cmd_init() {
-  METRICS_STEPS_TOTAL=5
+  METRICS_STEPS_TOTAL=4
   ascii_banner
   ensure_config_dir
   touch "$CONFIG_FILE" && chmod 600 "$CONFIG_FILE"
@@ -177,15 +187,6 @@ cmd_init() {
   save_kv APP_STORE_ISSUER_ID "$APP_STORE_ISSUER_ID"; save_kv APP_STORE_KEY_PATH "$APP_STORE_KEY_PATH"
   record_step "init: persist config"
 
-  local app_specific_password=""
-  if [[ "${NON_INTERACTIVE:-0}" == "0" ]]; then
-    read -r -s -p "Optional app-specific password (leave blank to skip): " app_specific_password; echo
-  fi
-  if [[ -n "$app_specific_password" ]]; then
-    set_keychain_secret "app_specific_password" "$app_specific_password"
-  fi
-  record_step "init: keychain sync"
-
   log "Initialization complete."
   record_step "init: finalize"
 }
@@ -200,6 +201,9 @@ cmd_build() {
   prompt_if_empty EXPORT_PATH "Export IPA directory" "build/export"
   prompt_if_empty ARCHIVE_PATH "Archive path" "build/Parlure.xcarchive"
   validate_team_id "$TEAM_ID"
+  validate_path_exists "$WORKSPACE"
+  validate_parent_writable "$ARCHIVE_PATH"
+  validate_parent_writable "$EXPORT_PATH/.ipa-check"
   record_step "build: validate"
 
   EXPORT_OPTIONS_PLIST="$(dirname "$ARCHIVE_PATH")/ExportOptions.plist"
@@ -236,7 +240,7 @@ cmd_publish() {
   [[ -n "$IPA_PATH" ]] || { err "No IPA found in $EXPORT_PATH"; exit 1; }
   record_step "publish: locate ipa"
 
-  xcrun altool --upload-app --type ios --file "$IPA_PATH" --apiKey "$APP_STORE_KEY_ID" --apiIssuer "$APP_STORE_ISSUER_ID" --verbose
+  xcrun iTMSTransporter -m upload -assetFile "$IPA_PATH" -apiKey "$APP_STORE_KEY_ID" -apiIssuer "$APP_STORE_ISSUER_ID" -v eXtreme
   record_step "publish: upload"
 
   log "Publish submitted."
@@ -261,13 +265,13 @@ main() {
 
   ensure_tools
   case "$action" in
-    init) cmd_init ;;
-    build) cmd_build ;;
-    publish) cmd_publish ;;
+    init) CURRENT_ACTION="init"; cmd_init ;;
+    build) CURRENT_ACTION="build"; cmd_build ;;
+    publish) CURRENT_ACTION="publish"; cmd_publish ;;
     all)
-      [[ -f "$CONFIG_FILE" ]] || cmd_init
-      cmd_build
-      cmd_publish
+      CURRENT_ACTION="all:init"; [[ -f "$CONFIG_FILE" ]] || cmd_init
+      CURRENT_ACTION="all:build"; cmd_build
+      CURRENT_ACTION="all:publish"; cmd_publish
       ;;
     help|--help|-h) usage ;;
     *) err "Unknown action: $action"; usage; exit 1 ;;
