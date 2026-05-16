@@ -46,3 +46,36 @@ ParlureTests valide notamment:
 2. Fermer l’app.
 3. Installer cette branche PR sur le même simulateur/appareil.
 4. Relancer et vérifier que l’Archive s’ouvre et que les anciennes données sont migrées, ou qu’une erreur claire/récupérable est affichée.
+
+## App Store AIO automation script
+
+A high-verbosity script is included at `scripts_appstore_aio.sh` to:
+
+- connect to your Apple Developer delivery flow using App Store Connect API credentials,
+- manage signing/build defaults,
+- securely store secrets in macOS Keychain,
+- build IPA artifacts,
+- publish to App Store Connect.
+
+### Quick start
+
+```bash
+./scripts_appstore_aio.sh init
+./scripts_appstore_aio.sh build
+./scripts_appstore_aio.sh publish
+# or run end-to-end:
+./scripts_appstore_aio.sh all
+```
+
+Defaults are saved at `~/.config/parlure-appstore/config.env` with `600` permissions. Secret values are stored in Keychain service `parlure.appstore.aio`.
+
+
+### Advanced behavior (refined)
+
+- ASCII progress bars for each stage (init/build/publish).
+- End-of-run metrics block with completed steps and elapsed seconds.
+- Validation hardening:
+  - strict Team ID format check (`^[A-Z0-9]{10}$`),
+  - required file checks for App Store Connect key,
+  - non-interactive mode for CI (`--non-interactive`) with safe defaults/fail-fast behavior.
+- Error trap prints failing line and command for faster debugging.
