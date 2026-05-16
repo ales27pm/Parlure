@@ -137,8 +137,9 @@ final class ExportService {
     }
 
     func export(turns: [DialogueTurn], glossary: [GlossaryEntry], options: ExportOptions) throws -> ExportResult {
-        let timestamp = Int(Date().timeIntervalSince1970)
-        let prefix = "parlure_\(timestamp)"
+        let timestampMs = Int(Date().timeIntervalSince1970 * 1000)
+        let suffix = UUID().uuidString.prefix(8)
+        let prefix = "parlure_\(timestampMs)_\(suffix)"
 
         let dialoguesURL = exportDir.appendingPathComponent("\(prefix)_dialogues.raw.jsonl")
         let glossaryURL = exportDir.appendingPathComponent("\(prefix)_glossary.raw.jsonl")
@@ -155,7 +156,8 @@ final class ExportService {
 
         let dialogueRecords = turns.map { turn in
             let pii = PIIRedactor.containsPII(text: turn.input + " " + turn.output)
-            if pii || turn.containsPersonalData || options.markContainsPersonalData { piiDetectedCount += 1 }
+            let piiDetectedOrKnown = pii || turn.containsPersonalData
+            if piiDetectedOrKnown { piiDetectedCount += 1 }
             if turn.reviewStatus == .pendingReview { pendingReviewCount += 1 }
             if turn.reviewStatus == .accepted { acceptedCount += 1 }
             if turn.reviewStatus == .redacted { redactedCount += 1 }
@@ -207,7 +209,8 @@ final class ExportService {
 
         let glossaryRecords = glossary.map { item in
             let pii = PIIRedactor.containsPII(text: item.utterance + " " + item.explanation)
-            if pii || item.containsPersonalData || options.markContainsPersonalData { piiDetectedCount += 1 }
+            let piiDetectedOrKnown = pii || item.containsPersonalData
+            if piiDetectedOrKnown { piiDetectedCount += 1 }
             if item.reviewStatus == .pendingReview { pendingReviewCount += 1 }
             if item.reviewStatus == .accepted { acceptedCount += 1 }
             if item.reviewStatus == .redacted { redactedCount += 1 }

@@ -72,6 +72,33 @@ final class ParlureTests: XCTestCase {
         XCTAssertEqual(d.source, .heuristic)
     }
 
+    @MainActor
+    func testExportFilenameUniqueness() throws {
+        let turns = [DialogueTurn(input: "allo", output: "salut", reviewStatus: .accepted)]
+        let glossary: [GlossaryEntry] = []
+        let first = try ExportService.shared.export(turns: turns, glossary: glossary, options: .init())
+        let second = try ExportService.shared.export(turns: turns, glossary: glossary, options: .init())
+        XCTAssertNotEqual(first.files.map(\.lastPathComponent).sorted(), second.files.map(\.lastPathComponent).sorted())
+    }
+
+    @MainActor
+    func testMetaPIICountNotInflatedByGlobalMarking() throws {
+        let turns = [DialogueTurn(input: "texte neutre", output: "réponse neutre", containsPersonalData: false, reviewStatus: .accepted)]
+        let glossary: [GlossaryEntry] = []
+        let result = try ExportService.shared.export(turns: turns, glossary: glossary, options: .init(allowTrainingExport: false, markContainsPersonalData: true, requireReviewBeforeExport: false, exportRedactedText: false))
+
+        let metaURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_meta.json") }))
+        let metaData = try Data(contentsOf: metaURL)
+        let metaObj = try JSONSerialization.jsonObject(with: metaData) as? [String: Any]
+        XCTAssertEqual(metaObj?["pii_detected_count"] as? Int, 0)
+
+        let rawURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_dialogues.raw.jsonl") }))
+        let raw = try String(contentsOf: rawURL, encoding: .utf8)
+        let firstLine = try XCTUnwrap(raw.split(separator: "\n").first)
+        let rawRecord = try JSONDecoder().decode(DialogueRawExportRecord.self, from: Data(firstLine.utf8))
+        XCTAssertTrue(rawRecord.containsPersonalData)
+    }
+
     func testModelDefaults() {
         let turn = DialogueTurn(input: "a", output: "b")
         XCTAssertEqual(turn.inputLocale, "fr-CA")

@@ -39,13 +39,13 @@ struct SettingsView: View {
                     }
 
                     section(title: "Confidentialité & export") {
-                        ToggleRow(icon: "lock.shield.fill", title: "Allow training export", subtitle: "Autorise le consentement entraînement", isOn: $allowTrainingExport)
+                        ToggleRow(icon: "lock.shield.fill", title: "Autoriser l’export entraînement", subtitle: "Autorise le consentement entraînement", isOn: $allowTrainingExport)
                         Divider().background(Theme.divider.opacity(0.5))
-                        ToggleRow(icon: "person.crop.circle.badge.exclamationmark", title: "Mark exports as containing personal data", subtitle: "Marquer sensible par défaut", isOn: $containsPersonalData)
+                        ToggleRow(icon: "person.crop.circle.badge.exclamationmark", title: "Marquer comme données personnelles", subtitle: "Marquer sensible par défaut", isOn: $containsPersonalData)
                         Divider().background(Theme.divider.opacity(0.5))
-                        ToggleRow(icon: "checklist", title: "Require review before export", subtitle: "Exiger une révision avant entraînement", isOn: $requireReviewBeforeExport)
+                        ToggleRow(icon: "checklist", title: "Exiger révision avant export", subtitle: "Exiger une révision avant entraînement", isOn: $requireReviewBeforeExport)
                         Divider().background(Theme.divider.opacity(0.5))
-                        ToggleRow(icon: "eye.slash", title: "Export redacted text when possible", subtitle: "Ajouter redacted_text quand possible", isOn: $exportRedactedText)
+                        ToggleRow(icon: "eye.slash", title: "Exporter le texte expurgé", subtitle: "Ajouter redacted_text quand possible", isOn: $exportRedactedText)
                     }
 
                     section(title: "Enregistrement") {

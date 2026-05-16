@@ -24,7 +24,10 @@ struct ArchiveView: View {
         let rejected = allStatuses.filter { $0 == .rejected }.count
         let redacted = allStatuses.filter { $0 == .redacted }.count
         let pii = turns.filter(\.containsPersonalData).count + glossary.filter(\.containsPersonalData).count
-        let consented = turns.filter { $0.consentForTraining && $0.reviewStatus == .accepted }.count + glossary.filter { $0.consentForTraining && $0.reviewStatus == .accepted }.count
+        let consented = allowTrainingExport
+            ? turns.filter { $0.consentForTraining && $0.reviewStatus == .accepted }.count
+                + glossary.filter { $0.consentForTraining && $0.reviewStatus == .accepted }.count
+            : 0
         let qfrExpected = turns.filter { $0.reviewStatus != .rejected }.count + glossary.filter { $0.reviewStatus != .rejected }.count
         return (accepted, pending, rejected, redacted, pii, consented, qfrExpected)
     }
@@ -36,8 +39,8 @@ struct ArchiveView: View {
                 VStack(spacing: 16) {
                     Text("Archive").font(.serif(34, weight: .bold)).foregroundStyle(Theme.ink).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20)
                     summaryCard
-                    ForEach(turns.prefix(20)) { turn in DialogueReviewRow(turn: turn, onSave: saveContext) }
-                    ForEach(glossary.prefix(20)) { entry in GlossaryReviewRow(entry: entry, onSave: saveContext) }
+                    ForEach(turns) { turn in DialogueReviewRow(turn: turn, onSave: saveContext) }
+                    ForEach(glossary) { entry in GlossaryReviewRow(entry: entry, onSave: saveContext) }
                     actions
                 }.padding(.bottom, 24)
             }

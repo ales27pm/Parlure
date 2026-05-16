@@ -26,7 +26,17 @@ final class LLMService {
     private func decideWithFM(history: [ChatMessage], userText: String) async -> LLMDecision? {
         guard SystemLanguageModel.default.isAvailable else { return nil }
         let session = LanguageModelSession(instructions: { "Réponds en français québécois, court et naturel." })
-        let prompt = "Utilisateur: \(userText)\nRetourne action/réponse/unclearTerms."
+        let context = history.suffix(6).map {
+            "\($0.role == .user ? "U" : "A"): \($0.content)"
+        }.joined(separator: "\n")
+        let prompt = """
+        Conversation récente:
+        \(context)
+
+        Utilisateur: \(userText)
+
+        Retourne action/réponse/unclearTerms.
+        """
         do {
             let r = try await session.respond(to: prompt, generating: GeneratedDecision.self)
             let action: LLMAction = r.content.action.lowercased().contains("clar") ? .askClarify : .answer

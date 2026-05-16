@@ -89,7 +89,14 @@ final class SpeechService: NSObject {
         }
 
         audioEngine.prepare()
-        do { try audioEngine.start() } catch { throw SpeechServiceError.engine(error.localizedDescription) }
+        do {
+            try audioEngine.start()
+        } catch {
+            cleanupAudioAndRecognition()
+            isRecording = false
+            isProcessingStop = false
+            throw SpeechServiceError.engine(error.localizedDescription)
+        }
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, _ in
             guard let self else { return }
@@ -111,7 +118,9 @@ final class SpeechService: NSObject {
     }
 
     func stopAndReturnTranscript() -> String {
-        guard isRecording || !isProcessingStop else { return finalLockedTranscript() }
+        guard isRecording else { return finalLockedTranscript() }
+        guard !isProcessingStop else { return finalLockedTranscript() }
+
         isProcessingStop = true
         let text = finalLockedTranscript()
         cleanupAudioAndRecognition()
@@ -147,7 +156,6 @@ final class SpeechService: NSObject {
         guard hasDetectedSpeech, let lastVoiceAt else { return }
         let elapsedMs = Date().timeIntervalSince(lastVoiceAt) * 1000
         if elapsedMs >= Double(silenceThresholdMs) {
-            isProcessingStop = true
             let text = stopAndReturnTranscript()
             onAutoStop(text)
         }
@@ -155,7 +163,6 @@ final class SpeechService: NSObject {
 
     private func handleMaxDuration(sessionID: UUID, onAutoStop: (String) -> Void) {
         guard recordingSessionID == sessionID, isRecording, !isProcessingStop else { return }
-        isProcessingStop = true
         let text = stopAndReturnTranscript()
         onAutoStop(text)
     }

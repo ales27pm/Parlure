@@ -12,11 +12,21 @@ Parlure est une application iOS locale pour capter la parole en français québ�
   - QFR import JSONL exclut les enregistrements `rejected`.
   - Les champs PII et `redacted_text` sont produits localement.
 
-## Build/Test
-- Build:
+## Validation
+- Build CLI:
   - `cd ios && xcodebuild -project Parlure.xcodeproj -scheme Parlure -destination 'platform=iOS Simulator,name=iPhone 16' build`
-- Tests:
+- Test CLI:
   - `cd ios && xcodebuild test -project Parlure.xcodeproj -scheme Parlure -destination 'platform=iOS Simulator,name=iPhone 16'`
+- Xcode:
+  - Product > Test (⌘U)
+
+ParlureTests valide notamment:
+- détection/rédaction PII
+- politique d’export
+- décodage `qfr_import` JSONL
+- échappement TSV
+- fallback heuristique
+- valeurs par défaut des modèles
 
 ## Exports produits
 - `parlure_<timestamp>_dialogues.raw.jsonl`

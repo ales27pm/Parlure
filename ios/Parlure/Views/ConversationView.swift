@@ -344,7 +344,7 @@ struct ConversationView: View {
         if autoTTS { TTSService.shared.speak(thanks) }
 
         // Also persist as a dialogue turn for export
-        let turn = DialogueTurn(input: p.utterance, output: pendingExplanation, outputSource: .manual, containsPersonalData: PIIRedactor.containsPII(text: p.utterance + " " + pendingExplanation))
+        let turn = DialogueTurn(input: p.utterance, output: pendingExplanation, recognizerLocale: speech.recognizerLocale, outputSource: .manual, containsPersonalData: PIIRedactor.containsPII(text: p.utterance + " " + pendingExplanation))
         modelContext.insert(turn)
         do { try modelContext.save() } catch { errorBanner = error.localizedDescription }
 
