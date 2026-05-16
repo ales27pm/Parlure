@@ -30,3 +30,9 @@ Parlure est une application iOS locale pour capter la parole en français québ�
 - FoundationModels est optionnel et seulement sur plateformes supportées.
 - Réviser/rédiger les données avant usage d’entraînement production/commercial.
 - Les réponses assistant sont synthétiques, pas un corpus humain pur.
+
+## Migration smoke test (manuel)
+1. Installer/exécuter la version main et créer 1 dialogue + 1 entrée glossaire.
+2. Fermer l’app.
+3. Installer cette branche PR sur le même simulateur/appareil.
+4. Relancer et vérifier que l’Archive s’ouvre et que les anciennes données sont migrées, ou qu’une erreur claire/récupérable est affichée.

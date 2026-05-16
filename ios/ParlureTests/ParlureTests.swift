@@ -33,6 +33,30 @@ final class ParlureTests: XCTestCase {
     }
 
     @MainActor
+    func testQFRJSONLDecodeValidation() throws {
+        let turns = [DialogueTurn(input: "allo", output: "salut", reviewStatus: .accepted, consentForTraining: true)]
+        let glossary = [GlossaryEntry(utterance: "char", unclearTerms: ["char"], explanation: "auto", reviewStatus: .accepted, consentForTraining: true)]
+        let result = try ExportService.shared.export(turns: turns, glossary: glossary, options: .init(allowTrainingExport: true, markContainsPersonalData: false, requireReviewBeforeExport: false, exportRedactedText: false))
+
+        guard let qfrURL = result.files.first(where: { $0.lastPathComponent.contains("_qfr_import.jsonl") }) else {
+            return XCTFail("qfr import file missing")
+        }
+        let raw = try String(contentsOf: qfrURL, encoding: .utf8)
+        let lines = raw.split(separator: "\n").map(String.init).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        XCTAssertEqual(lines.count, 2)
+
+        let decoder = JSONDecoder()
+        for line in lines {
+            let data = try XCTUnwrap(line.data(using: .utf8))
+            let record = try decoder.decode(QFRImportRecord.self, from: data)
+            XCTAssertEqual(record.language, "fr-CA")
+            XCTAssertFalse(record.text.isEmpty)
+            XCTAssertFalse(record.content.isEmpty)
+            XCTAssertEqual(record.reviewStatus, "accepted")
+        }
+    }
+
+    @MainActor
     func testTSVEscaping() {
         let t = DialogueTurn(input: "a\tb\n", output: "c\rd")
         let out = ExportService.shared.buildTSV(turns: [t], glossary: [])
@@ -41,6 +65,7 @@ final class ParlureTests: XCTestCase {
         XCTAssertTrue(out.contains("\\r"))
     }
 
+    @MainActor
     func testHeuristicFallback() {
         let d = LLMService.shared.heuristicDecision(userText: "c'est rough pantoute")
         XCTAssertEqual(d.action, .askClarify)

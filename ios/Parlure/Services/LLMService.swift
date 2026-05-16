@@ -15,10 +15,13 @@ final class LLMService {
         if let glossaryHint, !glossaryHint.isEmpty {
             return .init(action: .answer, response: "Bonne note du glossaire: \(glossaryHint)", unclearTerms: [], source: .glossary)
         }
-        if #available(iOS 26.0, *), let fm = await decideWithFM(history: history, userText: userText) { return fm }
+        if #available(iOS 26.0, *), let fm = await decideWithFM(history: history, userText: userText) {
+            return fm
+        }
         return heuristicDecision(userText: userText)
     }
 
+#if canImport(FoundationModels)
     @available(iOS 26.0, *)
     private func decideWithFM(history: [ChatMessage], userText: String) async -> LLMDecision? {
         guard SystemLanguageModel.default.isAvailable else { return nil }
@@ -26,10 +29,18 @@ final class LLMService {
         let prompt = "Utilisateur: \(userText)\nRetourne action/réponse/unclearTerms."
         do {
             let r = try await session.respond(to: prompt, generating: GeneratedDecision.self)
-            let a: LLMAction = r.content.action.lowercased().contains("clar") ? .askClarify : .answer
-            return .init(action: a, response: r.content.response, unclearTerms: r.content.unclearTerms, source: .foundationModels)
-        } catch { return nil }
+            let action: LLMAction = r.content.action.lowercased().contains("clar") ? .askClarify : .answer
+            return .init(action: action, response: r.content.response, unclearTerms: r.content.unclearTerms, source: .foundationModels)
+        } catch {
+            return nil
+        }
     }
+#else
+    @available(iOS 26.0, *)
+    private func decideWithFM(history: [ChatMessage], userText: String) async -> LLMDecision? {
+        nil
+    }
+#endif
 
     func heuristicDecision(userText: String) -> LLMDecision {
         let lower = userText.lowercased()
