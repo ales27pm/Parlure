@@ -242,7 +242,8 @@ cmd_publish() {
   [[ -n "$IPA_PATH" ]] || { err "No IPA found in $EXPORT_PATH"; exit 1; }
   record_step "publish: locate ipa"
 
-  xcrun iTMSTransporter -m upload -assetFile "$IPA_PATH" -apiKey "$APP_STORE_KEY_ID" -apiIssuer "$APP_STORE_ISSUER_ID" -v eXtreme
+  API_PRIVATE_KEYS_DIR="$(dirname "$APP_STORE_KEY_PATH")" \
+    xcrun iTMSTransporter -m upload -assetFile "$IPA_PATH" -apiKey "$APP_STORE_KEY_ID" -apiIssuer "$APP_STORE_ISSUER_ID" -v eXtreme
   record_step "publish: upload"
 
   log "Publish submitted."
@@ -258,7 +259,11 @@ main() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --config) CONFIG_FILE="$2"; shift 2 ;;
+      --config)
+        [[ ${2:-} ]] || { err "--config requires a path argument"; exit 1; }
+        CONFIG_FILE="$2"
+        shift 2
+        ;;
       --non-interactive) NON_INTERACTIVE=1; shift ;;
       --help|-h) usage; exit 0 ;;
       *) err "Unknown argument: $1"; usage; exit 1 ;;
