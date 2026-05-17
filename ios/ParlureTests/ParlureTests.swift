@@ -130,8 +130,19 @@ final class ParlureTests: XCTestCase {
         ])
         let query = "Le gars de taxi avait son kit pour débarrer la porte"
         let match = rag.bestMatch(for: query)
-        XCTAssertNotNil(match)
-        XCTAssertTrue(rag.shouldUseGlossary(match: try! XCTUnwrap(match), query: query))
+        guard let match else {
+            XCTFail("Expected a glossary match")
+            return
+        }
+        XCTAssertTrue(rag.shouldUseGlossary(match: match, query: query))
+    }
+
+    @MainActor
+    func testGlossaryRAGDoesNotUseBelowOverlapThreshold() {
+        let rag = GlossaryRAG()
+        let entry = GlossaryEntry(utterance: "kit", unclearTerms: ["kit"], explanation: "ensemble d'outils nécessaires pour débarrer une porte")
+        let match = GlossaryMatch(entry: entry, score: GlossaryRAG.overlapThreshold - 0.01)
+        XCTAssertFalse(rag.shouldUseGlossary(match: match, query: "Le taxi avait un kit"))
     }
 
     @MainActor
@@ -165,5 +176,21 @@ final class ParlureTests: XCTestCase {
     func testClarificationValidatorAcceptsUsefulReplies() {
         XCTAssertTrue(ClarificationValidator.validate(utterance: "kit", explanation: "un kit c'est l'ensemble des outils nécessaires pour débarrer une porte").isValid)
         XCTAssertTrue(ClarificationValidator.validate(utterance: "kit", explanation: "ça veut dire qu'il avait tout ce qu'il fallait pour faire la job").isValid)
+    }
+
+    func testFrenchTextHeuristicsFiltersStopwordsAndKeepsMeaningfulTerms() {
+        XCTAssertFalse(FrenchTextHeuristics.meaningfulTokens("c'est").contains("c'est"))
+        XCTAssertFalse(FrenchTextHeuristics.meaningfulTokens("c’est").contains("c'est"))
+        XCTAssertTrue(FrenchTextHeuristics.meaningfulTokens("pis ben là ça").isEmpty)
+
+        let meaningful = FrenchTextHeuristics.meaningfulTokens("kit pour débarrer la porte")
+        XCTAssertTrue(meaningful.contains("kit"))
+        XCTAssertTrue(meaningful.contains("débarrer"))
+        XCTAssertTrue(meaningful.contains("porte"))
+    }
+
+    func testAssistantMessageDeduperConsecutiveOnly() {
+        XCTAssertFalse(AssistantMessageDeduper.shouldAppend(lastRole: .assistant, lastAssistantNormalized: "Merci", candidateText: "Merci"))
+        XCTAssertTrue(AssistantMessageDeduper.shouldAppend(lastRole: .user, lastAssistantNormalized: "Merci", candidateText: "Merci"))
     }
 }

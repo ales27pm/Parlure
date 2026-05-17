@@ -7,6 +7,19 @@ import SwiftUI
 import SwiftData
 import Observation
 
+enum AssistantMessageDeduper {
+    static func normalize(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    }
+
+    static func shouldAppend(lastRole: ChatRole?, lastAssistantNormalized: String?, candidateText: String) -> Bool {
+        let normalized = normalize(candidateText)
+        guard !normalized.isEmpty else { return false }
+        guard lastRole == .assistant else { return true }
+        return normalized != lastAssistantNormalized
+    }
+}
+
 struct ConversationView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \DialogueTurn.timestamp, order: .reverse) private var allTurns: [DialogueTurn]
@@ -258,6 +271,7 @@ struct ConversationView: View {
 
         let userMsg = ChatMessage(role: .user, content: text)
         withAnimation { messages.append(userMsg) }
+        lastAssistantResponseNormalized = nil
 
         let match = rag.bestMatch(for: text)
         let glossaryContext = match.flatMap { m in
@@ -374,8 +388,8 @@ struct ConversationView: View {
     }
 
     private func appendAssistantMessageIfNeeded(_ text: String) {
-        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-        guard !normalized.isEmpty, normalized != lastAssistantResponseNormalized else { return }
+        let normalized = AssistantMessageDeduper.normalize(text)
+        guard AssistantMessageDeduper.shouldAppend(lastRole: messages.last?.role, lastAssistantNormalized: lastAssistantResponseNormalized, candidateText: text) else { return }
         withAnimation { messages.append(ChatMessage(role: .assistant, content: text)) }
         lastAssistantResponseNormalized = normalized
     }

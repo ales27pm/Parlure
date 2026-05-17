@@ -14,11 +14,7 @@ struct GlossaryMatch {
 
 @MainActor
 final class GlossaryRAG {
-    static let weakThreshold = 0.35
-    static let strongThreshold = 0.55
     static let overlapThreshold = 0.45
-
-    private let stopwords: Set<String> = ["je", "tu", "il", "elle", "on", "le", "la", "les", "un", "une", "des", "de", "du", "à", "a", "est", "c'est", "ça", "pis", "ben", "non", "oui", "pour", "avec"]
     private var entries: [GlossaryEntry] = []
     private var docTerms: [[String]] = []
     private var idf: [String: Double] = [:]
@@ -30,9 +26,7 @@ final class GlossaryRAG {
     }
 
     private func tokenize(_ text: String) -> [String] {
-        let lowered = text.lowercased()
-        let cleaned = lowered.replacingOccurrences(of: "[^\\p{L}\\p{N}\\s']", with: " ", options: .regularExpression)
-        let words = cleaned.split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { !$0.isEmpty }
+        let words = FrenchTextHeuristics.normalizedTokens(text)
         var grams = words
         if words.count > 1 {
             for i in 0..<(words.count - 1) {
@@ -43,11 +37,7 @@ final class GlossaryRAG {
     }
 
     private func meaningfulTokens(_ text: String) -> Set<String> {
-        Set(
-            tokenize(text)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty && !$0.contains(" ") && !stopwords.contains($0) }
-        )
+        FrenchTextHeuristics.meaningfulTokens(text)
     }
 
     private func rebuild() {
@@ -91,8 +81,9 @@ final class GlossaryRAG {
     }
 
     func shouldUseGlossary(match: GlossaryMatch, query: String) -> Bool {
-        guard match.score >= Self.weakThreshold else { return false }
-
+        // Policy: we only use a glossary match when the query shares meaningful
+        // lexical overlap with the learned expression and the similarity score is
+        // high enough to be trustworthy.
         let queryTokens = meaningfulTokens(query)
         guard !queryTokens.isEmpty else { return false }
 
@@ -100,9 +91,6 @@ final class GlossaryRAG {
         let overlapTokens = meaningfulTokens(overlapSource)
         let hasMeaningfulOverlap = !overlapTokens.intersection(queryTokens).isEmpty
 
-        if match.score >= Self.strongThreshold {
-            return hasMeaningfulOverlap
-        }
         return match.score >= Self.overlapThreshold && hasMeaningfulOverlap
     }
 
@@ -115,7 +103,7 @@ final class GlossaryRAG {
 
         let orderedTokens = tokenize(entry.utterance)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && !$0.contains(" ") && !stopwords.contains($0) }
+            .filter { !$0.isEmpty && !$0.contains(" ") && !FrenchTextHeuristics.stopwords.contains($0) }
         if !orderedTokens.isEmpty {
             return Array(orderedTokens.prefix(3)).joined(separator: " ")
         }

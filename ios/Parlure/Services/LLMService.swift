@@ -18,6 +18,9 @@ final class LLMService {
     static let shared = LLMService()
 
     func decide(history: [ChatMessage], userText: String, glossaryContext: GlossaryContext?) async -> LLMDecision {
+        if let glossaryContext, !glossaryContext.explanation.isEmpty {
+            return heuristicDecision(userText: userText, glossaryContext: glossaryContext)
+        }
         if #available(iOS 26.0, *), let fm = await decideWithFM(history: history, userText: userText, glossaryContext: glossaryContext) {
             return fm
         }
