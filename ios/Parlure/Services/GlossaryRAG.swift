@@ -14,6 +14,11 @@ struct GlossaryMatch {
 
 @MainActor
 final class GlossaryRAG {
+    static let weakThreshold = 0.35
+    static let strongThreshold = 0.55
+    static let overlapThreshold = 0.45
+
+    private let stopwords: Set<String> = ["je", "tu", "il", "elle", "on", "le", "la", "les", "un", "une", "des", "de", "du", "à", "a", "est", "c'est", "ça", "pis", "ben", "non", "oui", "pour", "avec"]
     private var entries: [GlossaryEntry] = []
     private var docTerms: [[String]] = []
     private var idf: [String: Double] = [:]
@@ -35,6 +40,14 @@ final class GlossaryRAG {
             }
         }
         return grams
+    }
+
+    private func meaningfulTokens(_ text: String) -> Set<String> {
+        Set(
+            tokenize(text)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && !$0.contains(" ") && !stopwords.contains($0) }
+        )
     }
 
     private func rebuild() {
@@ -75,6 +88,22 @@ final class GlossaryRAG {
         }
         guard bestIdx >= 0, bestScore >= threshold else { return nil }
         return GlossaryMatch(entry: entries[bestIdx], score: bestScore)
+    }
+
+    func shouldUseGlossary(match: GlossaryMatch, query: String) -> Bool {
+        guard match.score >= Self.weakThreshold else { return false }
+
+        let queryTokens = meaningfulTokens(query)
+        guard !queryTokens.isEmpty else { return false }
+
+        let overlapSource = [match.entry.utterance, match.entry.unclearTerms.joined(separator: " ")].joined(separator: " ")
+        let overlapTokens = meaningfulTokens(overlapSource)
+        let hasMeaningfulOverlap = !overlapTokens.intersection(queryTokens).isEmpty
+
+        if match.score >= Self.strongThreshold {
+            return hasMeaningfulOverlap
+        }
+        return match.score >= Self.overlapThreshold && hasMeaningfulOverlap
     }
 
     private func cosine(_ a: [String: Double], _ b: [String: Double]) -> Double {

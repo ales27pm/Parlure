@@ -107,4 +107,48 @@ final class ParlureTests: XCTestCase {
         XCTAssertEqual(g.region, "Québec")
         XCTAssertEqual(g.reviewStatus, .pendingReview)
     }
+
+    @MainActor
+    func testGlossaryRAGIgnoresUnrelatedCommonWords() {
+        let rag = GlossaryRAG()
+        rag.reload([
+            GlossaryEntry(utterance: "kit", unclearTerms: ["kit"], explanation: "ensemble d'outils nécessaires pour débarrer une porte")
+        ])
+
+        let query = "Car je vois à l'épicerie c'est mieux que j'aille pas faim quand j'ai faim"
+        let match = rag.bestMatch(for: query)
+        if let match {
+            XCTAssertFalse(rag.shouldUseGlossary(match: match, query: query))
+        }
+    }
+
+    @MainActor
+    func testGlossaryRAGUsesStrongNearMatch() {
+        let rag = GlossaryRAG()
+        rag.reload([
+            GlossaryEntry(utterance: "kit", unclearTerms: ["kit"], explanation: "ensemble d'outils nécessaires pour débarrer une porte")
+        ])
+        let query = "Le gars de taxi avait son kit pour débarrer la porte"
+        let match = rag.bestMatch(for: query)
+        XCTAssertNotNil(match)
+        XCTAssertTrue(rag.shouldUseGlossary(match: try! XCTUnwrap(match), query: query))
+    }
+
+    @MainActor
+    func testLLMServiceNoGlossaryDebugPrefix() {
+        let d = LLMService.shared.heuristicDecision(userText: "Le gars avait son kit", glossaryContext: .init(utterance: "kit", explanation: "l'ensemble des outils nécessaires", score: 0.8))
+        XCTAssertEqual(d.source, .glossary)
+        XCTAssertFalse(d.response.contains("Bonne note du glossaire"))
+        XCTAssertFalse(d.response.lowercased().contains("rag"))
+    }
+
+    func testClarificationValidatorRejectsWeakReplies() {
+        XCTAssertFalse(ClarificationValidator.validate(utterance: "kit", explanation: "oui c'est ça le kit c'est").isValid)
+        XCTAssertFalse(ClarificationValidator.validate(utterance: "kit", explanation: "je sais pas").isValid)
+    }
+
+    func testClarificationValidatorAcceptsUsefulReplies() {
+        XCTAssertTrue(ClarificationValidator.validate(utterance: "kit", explanation: "un kit c'est l'ensemble des outils nécessaires pour débarrer une porte").isValid)
+        XCTAssertTrue(ClarificationValidator.validate(utterance: "kit", explanation: "ça veut dire qu'il avait tout ce qu'il fallait pour faire la job").isValid)
+    }
 }
