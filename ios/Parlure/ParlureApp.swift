@@ -10,11 +10,19 @@ import SwiftData
 struct ParlureApp: App {
     let container: ModelContainer = {
         let schema = Schema([DialogueTurn.self, GlossaryEntry.self])
-        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        let diskConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+
         do {
-            return try ModelContainer(for: schema, configurations: [config])
+            return try ModelContainer(for: schema, configurations: [diskConfig])
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            assertionFailure("Could not create on-disk ModelContainer: \(error). Falling back to in-memory container.")
+
+            let memoryConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            do {
+                return try ModelContainer(for: schema, configurations: [memoryConfig])
+            } catch {
+                fatalError("Could not create fallback in-memory ModelContainer: \(error)")
+            }
         }
     }()
 
