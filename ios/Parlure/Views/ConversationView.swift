@@ -7,6 +7,19 @@ import SwiftUI
 import SwiftData
 import Observation
 
+enum AssistantMessageDeduper {
+    static func normalize(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    }
+
+    static func shouldAppend(lastRole: ChatRole?, lastAssistantNormalized: String?, candidateText: String) -> Bool {
+        let normalized = normalize(candidateText)
+        guard !normalized.isEmpty else { return false }
+        guard lastRole == .assistant else { return true }
+        return normalized != lastAssistantNormalized
+    }
+}
+
 struct ConversationView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \DialogueTurn.timestamp, order: .reverse) private var allTurns: [DialogueTurn]
@@ -29,6 +42,7 @@ struct ConversationView: View {
     @State private var errorBanner: String?
     @State private var activeRecordingID: UUID?
     @State private var processedRecordingIDs: Set<UUID> = []
+    @State private var lastAssistantResponseNormalized: String?
 
     var body: some View {
         ZStack {
@@ -51,15 +65,14 @@ struct ConversationView: View {
                                         removal: .opacity
                                     ))
                             }
+                            Color.clear.frame(height: 180).id("conversation-bottom-spacer")
                         }
                         .padding(.horizontal, 20)
                         .padding(.bottom, 20)
                     }
                     .onChange(of: messages.count) { _, _ in
-                        if let last = messages.last {
-                            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                                proxy.scrollTo(last.id, anchor: .bottom)
-                            }
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                            proxy.scrollTo("conversation-bottom-spacer", anchor: .bottom)
                         }
                     }
                 }
@@ -258,26 +271,28 @@ struct ConversationView: View {
 
         let userMsg = ChatMessage(role: .user, content: text)
         withAnimation { messages.append(userMsg) }
+        lastAssistantResponseNormalized = nil
 
-        let hint = rag.bestMatch(for: text)?.entry.explanation
-        let decision = await LLMService.shared.decide(history: messages, userText: text, glossaryHint: hint)
-
-        var responseText = decision.response
-        if let hint, decision.action == .answer, !responseText.contains(hint) {
-            responseText += "\n\nNote : \(hint)"
+        let match = rag.bestMatch(for: text)
+        let glossaryContext = match.flatMap { m in
+            rag.shouldUseGlossary(match: m, query: text)
+            ? GlossaryContext(displayTerm: rag.displayTerm(for: m.entry), utterance: m.entry.utterance, explanation: m.entry.explanation, score: m.score)
+            : nil
         }
+        let decision = await LLMService.shared.decide(history: messages, userText: text, glossaryContext: glossaryContext)
+        let responseText = decision.response
 
         if decision.action == .askClarify {
             pending = PendingClarification(utterance: text, terms: decision.unclearTerms)
             mode = .clarifying
             statusText = "Aide-moi à comprendre"
-            withAnimation { messages.append(ChatMessage(role: .assistant, content: responseText)) }
+            appendAssistantMessageIfNeeded(responseText)
             if autoTTS { TTSService.shared.speak(responseText) }
         } else {
-            withAnimation { messages.append(ChatMessage(role: .assistant, content: responseText)) }
+            appendAssistantMessageIfNeeded(responseText)
             if autoTTS { TTSService.shared.speak(responseText) }
             // Persist dialogue turn
-            let turn = DialogueTurn(input: text, output: responseText, recognizerLocale: speech.recognizerLocale, outputSource: decision.source == .foundationModels ? .foundationModels : decision.source == .glossary ? .glossary : .heuristic, glossaryHintUsed: hint != nil, containsPersonalData: PIIRedactor.containsPII(text: text + " " + responseText))
+            let turn = DialogueTurn(input: text, output: responseText, recognizerLocale: speech.recognizerLocale, outputSource: decision.source == .foundationModels ? .foundationModels : decision.source == .glossary ? .glossary : .heuristic, glossaryHintUsed: glossaryContext != nil, containsPersonalData: PIIRedactor.containsPII(text: text + " " + responseText))
             modelContext.insert(turn)
             do { try modelContext.save() } catch { errorBanner = error.localizedDescription }
             mode = .idle
@@ -331,20 +346,30 @@ struct ConversationView: View {
             showConfirmSheet = false
             return
         }
+        let validation = ClarificationValidator.validate(utterance: p.utterance, explanation: pendingExplanation)
+        guard validation.isValid else {
+            let retry = "Je l’ai pas assez clair encore. Peux-tu me l’expliquer avec d’autres mots, comme si tu l’expliquais à quelqu’un qui connaît pas l’expression?"
+            appendAssistantMessageIfNeeded(retry)
+            if autoTTS { TTSService.shared.speak(retry) }
+            showConfirmSheet = false
+            mode = .clarifying
+            statusText = "Aide-moi à comprendre"
+            return
+        }
         let entry = GlossaryEntry(
             utterance: p.utterance,
             unclearTerms: p.terms,
-            explanation: pendingExplanation
+            explanation: validation.cleanedExplanation
         )
         modelContext.insert(entry)
         do { try modelContext.save() } catch { errorBanner = error.localizedDescription }
 
-        let thanks = "Merci ! J'ai retenu : « \(p.utterance) » — \(pendingExplanation)"
-        withAnimation { messages.append(ChatMessage(role: .assistant, content: thanks)) }
+        let thanks = "Merci ! Là je comprends mieux ce que tu veux dire par « \(p.utterance) » : \(validation.cleanedExplanation)"
+        appendAssistantMessageIfNeeded(thanks)
         if autoTTS { TTSService.shared.speak(thanks) }
 
         // Also persist as a dialogue turn for export
-        let turn = DialogueTurn(input: p.utterance, output: pendingExplanation, recognizerLocale: speech.recognizerLocale, outputSource: .manual, containsPersonalData: PIIRedactor.containsPII(text: p.utterance + " " + pendingExplanation))
+        let turn = DialogueTurn(input: p.utterance, output: validation.cleanedExplanation, recognizerLocale: speech.recognizerLocale, outputSource: .manual, containsPersonalData: PIIRedactor.containsPII(text: p.utterance + " " + validation.cleanedExplanation))
         modelContext.insert(turn)
         do { try modelContext.save() } catch { errorBanner = error.localizedDescription }
 
@@ -360,6 +385,13 @@ struct ConversationView: View {
         pendingExplanation = ""
         mode = .idle
         statusText = "Prêt"
+    }
+
+    private func appendAssistantMessageIfNeeded(_ text: String) {
+        let normalized = AssistantMessageDeduper.normalize(text)
+        guard AssistantMessageDeduper.shouldAppend(lastRole: messages.last?.role, lastAssistantNormalized: lastAssistantResponseNormalized, candidateText: text) else { return }
+        withAnimation { messages.append(ChatMessage(role: .assistant, content: text)) }
+        lastAssistantResponseNormalized = normalized
     }
 }
 
@@ -379,19 +411,22 @@ private struct StatusPill: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Circle()
                 .fill(color)
                 .frame(width: 7, height: 7)
                 .opacity(mode == .recording || mode == .clarificationRecording || mode == .processing ? 1 : 0.6)
-                .scaleEffect(mode == .recording || mode == .clarificationRecording ? 1.4 : 1)
-                .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: mode)
+                .scaleEffect(mode == .recording || mode == .clarificationRecording ? 1.12 : 1)
+                .animation(mode == .recording || mode == .clarificationRecording ? .easeInOut(duration: 0.7).repeatForever(autoreverses: true) : .default, value: mode)
             Text(text)
                 .font(.serif(12, weight: .medium))
                 .foregroundStyle(Theme.inkSoft)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        .frame(minWidth: 170, alignment: .leading)
         .background(Theme.cream.opacity(0.8))
         .overlay(Capsule().stroke(Theme.divider.opacity(0.5), lineWidth: 1))
         .clipShape(Capsule())

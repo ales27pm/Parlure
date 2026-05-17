@@ -14,6 +14,7 @@ struct GlossaryMatch {
 
 @MainActor
 final class GlossaryRAG {
+    static let overlapThreshold = 0.45
     private var entries: [GlossaryEntry] = []
     private var docTerms: [[String]] = []
     private var idf: [String: Double] = [:]
@@ -25,9 +26,7 @@ final class GlossaryRAG {
     }
 
     private func tokenize(_ text: String) -> [String] {
-        let lowered = text.lowercased()
-        let cleaned = lowered.replacingOccurrences(of: "[^\\p{L}\\p{N}\\s']", with: " ", options: .regularExpression)
-        let words = cleaned.split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { !$0.isEmpty }
+        let words = FrenchTextHeuristics.normalizedTokens(text)
         var grams = words
         if words.count > 1 {
             for i in 0..<(words.count - 1) {
@@ -35,6 +34,10 @@ final class GlossaryRAG {
             }
         }
         return grams
+    }
+
+    private func meaningfulTokens(_ text: String) -> Set<String> {
+        FrenchTextHeuristics.meaningfulTokens(text)
     }
 
     private func rebuild() {
@@ -75,6 +78,37 @@ final class GlossaryRAG {
         }
         guard bestIdx >= 0, bestScore >= threshold else { return nil }
         return GlossaryMatch(entry: entries[bestIdx], score: bestScore)
+    }
+
+    func shouldUseGlossary(match: GlossaryMatch, query: String) -> Bool {
+        // Policy: we only use a glossary match when the query shares meaningful
+        // lexical overlap with the learned expression and the similarity score is
+        // high enough to be trustworthy.
+        let queryTokens = meaningfulTokens(query)
+        guard !queryTokens.isEmpty else { return false }
+
+        let overlapSource = [match.entry.utterance, match.entry.unclearTerms.joined(separator: " ")].joined(separator: " ")
+        let overlapTokens = meaningfulTokens(overlapSource)
+        let hasMeaningfulOverlap = !overlapTokens.intersection(queryTokens).isEmpty
+
+        return match.score >= Self.overlapThreshold && hasMeaningfulOverlap
+    }
+
+    func displayTerm(for entry: GlossaryEntry) -> String {
+        if let first = entry.unclearTerms
+            .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .first(where: { !$0.isEmpty && !meaningfulTokens($0).isEmpty }) {
+            return first
+        }
+
+        let orderedTokens = tokenize(entry.utterance)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.contains(" ") && !FrenchTextHeuristics.stopwords.contains($0) }
+        if !orderedTokens.isEmpty {
+            return Array(orderedTokens.prefix(3)).joined(separator: " ")
+        }
+
+        return entry.utterance.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func cosine(_ a: [String: Double], _ b: [String: Double]) -> Double {

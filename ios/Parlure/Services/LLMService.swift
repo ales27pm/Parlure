@@ -6,34 +6,54 @@ import FoundationModels
 enum DecisionSource: String, Codable { case foundationModels, heuristic, glossary }
 enum LLMAction: String { case answer, askClarify }
 struct LLMDecision { var action: LLMAction; var response: String; var unclearTerms: [String]; var source: DecisionSource }
+struct GlossaryContext {
+    var displayTerm: String
+    var utterance: String
+    var explanation: String
+    var score: Double
+}
 
 @MainActor
 final class LLMService {
     static let shared = LLMService()
 
-    func decide(history: [ChatMessage], userText: String, glossaryHint: String?) async -> LLMDecision {
-        if let glossaryHint, !glossaryHint.isEmpty {
-            return .init(action: .answer, response: "Bonne note du glossaire: \(glossaryHint)", unclearTerms: [], source: .glossary)
+    func decide(history: [ChatMessage], userText: String, glossaryContext: GlossaryContext?) async -> LLMDecision {
+        if let glossaryContext, !glossaryContext.explanation.isEmpty {
+            return heuristicDecision(userText: userText, glossaryContext: glossaryContext)
         }
-        if #available(iOS 26.0, *), let fm = await decideWithFM(history: history, userText: userText) {
+        if #available(iOS 26.0, *), let fm = await decideWithFM(history: history, userText: userText, glossaryContext: glossaryContext) {
             return fm
         }
-        return heuristicDecision(userText: userText)
+        return heuristicDecision(userText: userText, glossaryContext: glossaryContext)
     }
 
 #if canImport(FoundationModels)
     @available(iOS 26.0, *)
-    private func decideWithFM(history: [ChatMessage], userText: String) async -> LLMDecision? {
+    private func decideWithFM(history: [ChatMessage], userText: String, glossaryContext: GlossaryContext?) async -> LLMDecision? {
         guard SystemLanguageModel.default.isAvailable else { return nil }
         let session = LanguageModelSession(instructions: { "Réponds en français québécois, court et naturel." })
         let context = history.suffix(6).map {
             "\($0.role == .user ? "U" : "A"): \($0.content)"
         }.joined(separator: "\n")
+        let lexicalContext: String
+        if let glossaryContext {
+            lexicalContext = """
+
+            Contexte lexical appris localement:
+            Expression: \(glossaryContext.displayTerm)
+            Sens: \(glossaryContext.explanation)
+            Utilise ce contexte seulement s’il aide vraiment à répondre naturellement.
+            """
+        } else {
+            lexicalContext = ""
+        }
+
         let prompt = """
         Conversation récente:
         \(context)
 
         Utilisateur: \(userText)
+        \(lexicalContext)
 
         Retourne action/réponse/unclearTerms.
         """
@@ -47,16 +67,23 @@ final class LLMService {
     }
 #else
     @available(iOS 26.0, *)
-    private func decideWithFM(history: [ChatMessage], userText: String) async -> LLMDecision? {
+    private func decideWithFM(history: [ChatMessage], userText: String, glossaryContext: GlossaryContext?) async -> LLMDecision? {
         nil
     }
 #endif
 
-    func heuristicDecision(userText: String) -> LLMDecision {
+    func heuristicDecision(userText: String, glossaryContext: GlossaryContext? = nil) -> LLMDecision {
+        if let glossaryContext, !glossaryContext.explanation.isEmpty {
+            let response = "Ah ok, je te suis. Ici, « \(glossaryContext.displayTerm) », c’est \(glossaryContext.explanation)."
+            return .init(action: .answer, response: response, unclearTerms: [], source: .glossary)
+        }
+
         let lower = userText.lowercased()
-        let idiomSignals = ["ça a pas d'allure", "pantoute", "char", "magasiner", "c'est rough", "donne-moi une break"]
-        if idiomSignals.contains(where: { lower.contains($0) }) {
-            return .init(action: .askClarify, response: "Je veux bien capter le sens québécois exact—tu peux me l'expliquer en une phrase?", unclearTerms: idiomSignals.filter { lower.contains($0) }, source: .heuristic)
+        let idiomSignals = ["ça a pas d'allure", "pantoute", "char", "magasiner", "c'est rough", "donne-moi une break", "kit"]
+        let matched = idiomSignals.filter { lower.contains($0) }
+        if let first = matched.first {
+            let response = "Juste pour être sûr: dans ta phrase, « \(first) », ça veut dire quoi exactement?"
+            return .init(action: .askClarify, response: response, unclearTerms: matched, source: .heuristic)
         }
         if userText.split(separator: " ").count <= 2 {
             return .init(action: .answer, response: "Parfait, continue. Je t'écoute.", unclearTerms: [], source: .heuristic)
