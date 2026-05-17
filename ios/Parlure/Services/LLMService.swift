@@ -7,6 +7,7 @@ enum DecisionSource: String, Codable { case foundationModels, heuristic, glossar
 enum LLMAction: String { case answer, askClarify }
 struct LLMDecision { var action: LLMAction; var response: String; var unclearTerms: [String]; var source: DecisionSource }
 struct GlossaryContext {
+    var displayTerm: String
     var utterance: String
     var explanation: String
     var score: Double
@@ -17,7 +18,7 @@ final class LLMService {
     static let shared = LLMService()
 
     func decide(history: [ChatMessage], userText: String, glossaryContext: GlossaryContext?) async -> LLMDecision {
-        if #available(iOS 26.0, *), let fm = await decideWithFM(history: history, userText: userText) {
+        if #available(iOS 26.0, *), let fm = await decideWithFM(history: history, userText: userText, glossaryContext: glossaryContext) {
             return fm
         }
         return heuristicDecision(userText: userText, glossaryContext: glossaryContext)
@@ -25,17 +26,31 @@ final class LLMService {
 
 #if canImport(FoundationModels)
     @available(iOS 26.0, *)
-    private func decideWithFM(history: [ChatMessage], userText: String) async -> LLMDecision? {
+    private func decideWithFM(history: [ChatMessage], userText: String, glossaryContext: GlossaryContext?) async -> LLMDecision? {
         guard SystemLanguageModel.default.isAvailable else { return nil }
         let session = LanguageModelSession(instructions: { "Réponds en français québécois, court et naturel." })
         let context = history.suffix(6).map {
             "\($0.role == .user ? "U" : "A"): \($0.content)"
         }.joined(separator: "\n")
+        let lexicalContext: String
+        if let glossaryContext {
+            lexicalContext = """
+
+            Contexte lexical appris localement:
+            Expression: \(glossaryContext.displayTerm)
+            Sens: \(glossaryContext.explanation)
+            Utilise ce contexte seulement s’il aide vraiment à répondre naturellement.
+            """
+        } else {
+            lexicalContext = ""
+        }
+
         let prompt = """
         Conversation récente:
         \(context)
 
         Utilisateur: \(userText)
+        \(lexicalContext)
 
         Retourne action/réponse/unclearTerms.
         """
@@ -49,14 +64,14 @@ final class LLMService {
     }
 #else
     @available(iOS 26.0, *)
-    private func decideWithFM(history: [ChatMessage], userText: String) async -> LLMDecision? {
+    private func decideWithFM(history: [ChatMessage], userText: String, glossaryContext: GlossaryContext?) async -> LLMDecision? {
         nil
     }
 #endif
 
     func heuristicDecision(userText: String, glossaryContext: GlossaryContext? = nil) -> LLMDecision {
         if let glossaryContext, !glossaryContext.explanation.isEmpty {
-            let response = "Ah ok, ici « \(glossaryContext.utterance) », ça veut dire \(glossaryContext.explanation)."
+            let response = "Ah ok, je te suis. Ici, « \(glossaryContext.displayTerm) », c’est \(glossaryContext.explanation)."
             return .init(action: .answer, response: response, unclearTerms: [], source: .glossary)
         }
 

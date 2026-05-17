@@ -136,10 +136,25 @@ final class ParlureTests: XCTestCase {
 
     @MainActor
     func testLLMServiceNoGlossaryDebugPrefix() {
-        let d = LLMService.shared.heuristicDecision(userText: "Le gars avait son kit", glossaryContext: .init(utterance: "kit", explanation: "l'ensemble des outils nécessaires", score: 0.8))
+        let d = LLMService.shared.heuristicDecision(userText: "Le gars avait son kit", glossaryContext: .init(displayTerm: "kit", utterance: "Le gars avait son kit", explanation: "l'ensemble des outils nécessaires", score: 0.8))
         XCTAssertEqual(d.source, .glossary)
         XCTAssertFalse(d.response.contains("Bonne note du glossaire"))
         XCTAssertFalse(d.response.lowercased().contains("rag"))
+    }
+
+    @MainActor
+    func testGlossaryContextDisplayTermUsesUnclearTermFirst() {
+        let rag = GlossaryRAG()
+        let entry = GlossaryEntry(utterance: "le gars de taxi avait un kit pour débarrer", unclearTerms: ["kit"], explanation: "ensemble d'outils")
+        XCTAssertEqual(rag.displayTerm(for: entry), "kit")
+    }
+
+    @MainActor
+    func testGlossaryHeuristicUsesDisplayTermNotUtterance() {
+        let context = GlossaryContext(displayTerm: "kit", utterance: "le gars de taxi avait un kit pour débarrer", explanation: "l’ensemble des outils nécessaires", score: 0.9)
+        let d = LLMService.shared.heuristicDecision(userText: "ok", glossaryContext: context)
+        XCTAssertTrue(d.response.contains("« kit »"))
+        XCTAssertFalse(d.response.contains("« le gars de taxi avait un kit pour débarrer »"))
     }
 
     func testClarificationValidatorRejectsWeakReplies() {

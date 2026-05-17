@@ -106,6 +106,23 @@ final class GlossaryRAG {
         return match.score >= Self.overlapThreshold && hasMeaningfulOverlap
     }
 
+    func displayTerm(for entry: GlossaryEntry) -> String {
+        if let first = entry.unclearTerms
+            .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .first(where: { !$0.isEmpty && !meaningfulTokens($0).isEmpty }) {
+            return first
+        }
+
+        let orderedTokens = tokenize(entry.utterance)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.contains(" ") && !stopwords.contains($0) }
+        if !orderedTokens.isEmpty {
+            return Array(orderedTokens.prefix(3)).joined(separator: " ")
+        }
+
+        return entry.utterance.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func cosine(_ a: [String: Double], _ b: [String: Double]) -> Double {
         var dot = 0.0, na = 0.0, nb = 0.0
         for (_, v) in a { na += v * v }
