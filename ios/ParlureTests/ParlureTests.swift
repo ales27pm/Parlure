@@ -189,6 +189,44 @@ final class ParlureTests: XCTestCase {
         XCTAssertTrue(meaningful.contains("porte"))
     }
 
+
+    func testPendingClarificationResolvedTermsNoStaleReuse() {
+        XCTAssertEqual(PendingClarification.resolvedTerms(utterance: "Fucké le chien", detectedTerms: ["faire le fin"]), ["faire le fin"])
+        XCTAssertNotEqual(PendingClarification.resolvedTerms(utterance: "Fucké le chien", detectedTerms: []), ["faire le fin"])
+        XCTAssertNotEqual(PendingClarification.resolvedTerms(utterance: "Virer une brosse", detectedTerms: []), ["attache ta tuque"])
+    }
+
+    func testGlossaryQualityRejectsStaleUnclearTerms() {
+        let r1 = GlossaryQualityValidator.validate(utterance: "Fucké le chien", explanation: "Ça veut dire avoir manqué une bonne occasion de réussir.", unclearTerms: ["faire le fin"], detectedTerms: [])
+        XCTAssertFalse(r1.isValid)
+        let r2 = GlossaryQualityValidator.validate(utterance: "Virer une brosse", explanation: "Ça veut dire boire beaucoup d'alcool avec des amis.", unclearTerms: ["attache ta tuque"], detectedTerms: [])
+        XCTAssertFalse(r2.isValid)
+    }
+
+    @MainActor
+    func testExportManualVsSyntheticFlags() throws {
+        let turns = [
+            DialogueTurn(input: "u", output: "h", outputSource: .manual, reviewStatus: .accepted, containsPersonalData: false),
+            DialogueTurn(input: "u2", output: "a", outputSource: .heuristic, reviewStatus: .pendingReview, containsPersonalData: false)
+        ]
+        let result = try ExportService.shared.export(turns: turns, glossary: [], options: .init(markContainsPersonalData: false))
+        let rawURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_dialogues.raw.jsonl") }))
+        let lines = try String(contentsOf: rawURL).split(separator: "\n").map(String.init)
+        let decoder = JSONDecoder()
+        let records = try lines.map { try decoder.decode(DialogueRawExportRecord.self, from: Data($0.utf8)) }
+        let manual = try XCTUnwrap(records.first(where: { $0.outputSource == "manual" }))
+        XCTAssertFalse(manual.syntheticOutput)
+        XCTAssertTrue(manual.humanOutput)
+        let heuristic = try XCTUnwrap(records.first(where: { $0.outputSource == "heuristic" }))
+        XCTAssertTrue(heuristic.syntheticOutput)
+
+        let qfrURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_qfr_import.jsonl") }))
+        let qfrLines = try String(contentsOf: qfrURL).split(separator: "\n").map(String.init)
+        let qfr = try qfrLines.map { try decoder.decode(QFRImportRecord.self, from: Data($0.utf8)) }
+        XCTAssertFalse(try XCTUnwrap(qfr.first(where: { $0.outputSource == "manual" })).syntheticComponent)
+        XCTAssertTrue(try XCTUnwrap(qfr.first(where: { $0.outputSource == "heuristic" })).syntheticComponent)
+    }
+
     func testAssistantMessageDeduperConsecutiveOnly() {
         XCTAssertFalse(AssistantMessageDeduper.shouldAppend(lastRole: .assistant, lastAssistantNormalized: "Merci", candidateText: "Merci"))
         XCTAssertTrue(AssistantMessageDeduper.shouldAppend(lastRole: .user, lastAssistantNormalized: "Merci", candidateText: "Merci"))

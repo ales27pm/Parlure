@@ -31,7 +31,7 @@ final class LLMService {
     @available(iOS 26.0, *)
     private func decideWithFM(history: [ChatMessage], userText: String, glossaryContext: GlossaryContext?) async -> LLMDecision? {
         guard SystemLanguageModel.default.isAvailable else { return nil }
-        let session = LanguageModelSession(instructions: { "Réponds en français québécois, court et naturel." })
+        let session = LanguageModelSession(instructions: { "Réponds en français québécois, court et naturel. Ne remplace pas débarrer par débarrasser. En contexte québécois, débarrer veut dire déverrouiller." })
         let context = history.suffix(6).map {
             "\($0.role == .user ? "U" : "A"): \($0.content)"
         }.joined(separator: "\n")
@@ -84,6 +84,12 @@ final class LLMService {
         if let first = matched.first {
             let response = "Juste pour être sûr: dans ta phrase, « \(first) », ça veut dire quoi exactement?"
             return .init(action: .askClarify, response: response, unclearTerms: matched, source: .heuristic)
+        }
+        if lower.contains("débarrer") && (lower.contains("porte") || lower.contains("char")) {
+            return .init(action: .answer, response: "Tu veux dire déverrouiller les portes du char?", unclearTerms: [], source: .heuristic)
+        }
+        if lower.contains("clé") && (lower.contains("barr") || lower.contains("porte")) {
+            return .init(action: .askClarify, response: "Ouin, ça sonne frustrant. Tu veux dire que t'as besoin de déverrouiller la porte?", unclearTerms: ["débarrer"], source: .heuristic)
         }
         if userText.split(separator: " ").count <= 2 {
             return .init(action: .answer, response: "Parfait, continue. Je t'écoute.", unclearTerms: [], source: .heuristic)

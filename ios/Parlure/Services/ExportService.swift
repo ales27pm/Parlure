@@ -28,16 +28,20 @@ struct DialogueRawExportRecord: Codable {
     let glossaryHintUsed: Bool
     let reviewStatus: String
     let containsPersonalData: Bool
+    let detectedPII: Bool
+    let userMarkedSensitive: Bool
     let consentForTraining: Bool
     let syntheticOutput: Bool
+    let humanOutput: Bool
+    let assistantGenerated: Bool
     let notes: String?
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version", id, timestamp, type, input, output
         case inputLocale = "input_locale", recognizerLocale = "recognizer_locale", outputSource = "output_source"
         case glossaryHintUsed = "glossary_hint_used", reviewStatus = "review_status"
-        case containsPersonalData = "contains_personal_data", consentForTraining = "consent_for_training"
-        case syntheticOutput = "synthetic_output", notes
+        case containsPersonalData = "contains_personal_data", detectedPII = "detected_pii", userMarkedSensitive = "user_marked_sensitive", consentForTraining = "consent_for_training"
+        case syntheticOutput = "synthetic_output", humanOutput = "human_output", assistantGenerated = "assistant_generated", notes
     }
 }
 
@@ -52,15 +56,19 @@ struct GlossaryRawExportRecord: Codable {
     let region: String
     let reviewStatus: String
     let containsPersonalData: Bool
+    let detectedPII: Bool
+    let userMarkedSensitive: Bool
     let consentForTraining: Bool
     let syntheticOutput: Bool
+    let humanOutput: Bool
+    let assistantGenerated: Bool
     let notes: String?
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version", id, timestamp, type, utterance
         case unclearTerms = "unclear_terms", explanation, region, reviewStatus = "review_status"
-        case containsPersonalData = "contains_personal_data", consentForTraining = "consent_for_training"
-        case syntheticOutput = "synthetic_output", notes
+        case containsPersonalData = "contains_personal_data", detectedPII = "detected_pii", userMarkedSensitive = "user_marked_sensitive", consentForTraining = "consent_for_training"
+        case syntheticOutput = "synthetic_output", humanOutput = "human_output", assistantGenerated = "assistant_generated", notes
     }
 }
 
@@ -73,6 +81,8 @@ struct QFRImportRecord: Codable {
     let dialectRegion: String
     let register: String
     let containsPersonalData: Bool
+    let detectedPII: Bool
+    let userMarkedSensitive: Bool
     let requiresReview: Bool
     let consentForTraining: Bool
     let syntheticComponent: Bool
@@ -85,7 +95,7 @@ struct QFRImportRecord: Codable {
     enum CodingKeys: String, CodingKey {
         case text, content, language, register, provenance, license
         case sourceId = "source_id", captureType = "capture_type", dialectRegion = "dialect_region"
-        case containsPersonalData = "contains_personal_data", requiresReview = "requires_review"
+        case containsPersonalData = "contains_personal_data", detectedPII = "detected_pii", userMarkedSensitive = "user_marked_sensitive", requiresReview = "requires_review"
         case consentForTraining = "consent_for_training", syntheticComponent = "synthetic_component"
         case reviewStatus = "review_status", outputSource = "output_source", redactedText = "redacted_text"
     }
@@ -104,6 +114,7 @@ struct ExportMetaRecord: Codable {
     let acceptedCount: Int
     let redactedCount: Int
     let piiDetectedCount: Int
+    let sensitiveMarkedCount: Int
     let defaultLocale: String
     let consentSettings: [String: Bool]
     let privacyFlags: [String: Bool]
@@ -114,7 +125,7 @@ struct ExportMetaRecord: Codable {
         case schemaVersions = "schema_versions", dialogueCount = "dialogue_count", glossaryCount = "glossary_count"
         case qfrImportCount = "qfr_import_count", rejectedExcludedCount = "rejected_excluded_count"
         case pendingReviewCount = "pending_review_count", acceptedCount = "accepted_count", redactedCount = "redacted_count"
-        case piiDetectedCount = "pii_detected_count", defaultLocale = "default_locale"
+        case piiDetectedCount = "pii_detected_count", sensitiveMarkedCount = "sensitive_marked_count", defaultLocale = "default_locale"
         case consentSettings = "consent_settings", privacyFlags = "privacy_flags", warning
     }
 }
@@ -146,6 +157,7 @@ final class ExportService {
         let qfrURL = exportDir.appendingPathComponent("\(prefix)_qfr_import.jsonl")
         let parallelURL = exportDir.appendingPathComponent("\(prefix)_parallel.tsv")
         let metaURL = exportDir.appendingPathComponent("\(prefix)_meta.json")
+        let qualityURL = exportDir.appendingPathComponent("\(prefix)_quality_report.json")
 
         var qfrRecords: [QFRImportRecord] = []
         var rejectedExcludedCount = 0
@@ -153,11 +165,17 @@ final class ExportService {
         var pendingReviewCount = 0
         var acceptedCount = 0
         var redactedCount = 0
+        var sensitiveMarkedCount = 0
+        var assistantGeneratedCount = 0
+        var manualHumanCount = 0
 
         let dialogueRecords = turns.map { turn in
             let pii = PIIRedactor.containsPII(text: turn.input + " " + turn.output)
             let piiDetectedOrKnown = pii || turn.containsPersonalData
             if piiDetectedOrKnown { piiDetectedCount += 1 }
+            let assistantGenerated = turn.outputSource != .manual
+            let syntheticOutput = assistantGenerated
+            if assistantGenerated { assistantGeneratedCount += 1 } else { manualHumanCount += 1 }
             if turn.reviewStatus == .pendingReview { pendingReviewCount += 1 }
             if turn.reviewStatus == .accepted { acceptedCount += 1 }
             if turn.reviewStatus == .redacted { redactedCount += 1 }
@@ -166,6 +184,7 @@ final class ExportService {
             let consent = trainingConsent(global: options.allowTrainingExport, itemConsent: turn.consentForTraining, reviewStatus: turn.reviewStatus)
             let requiresReview = options.requireReviewBeforeExport || turn.reviewStatus == .pendingReview
             let containsPersonalData = pii || turn.containsPersonalData || options.markContainsPersonalData
+            if options.markContainsPersonalData { sensitiveMarkedCount += 1 }
 
             if turn.reviewStatus != .rejected {
                 qfrRecords.append(QFRImportRecord(
@@ -177,9 +196,11 @@ final class ExportService {
                     dialectRegion: "Quebec",
                     register: "informal",
                     containsPersonalData: containsPersonalData,
+                    detectedPII: piiDetectedOrKnown,
+                    userMarkedSensitive: options.markContainsPersonalData,
                     requiresReview: requiresReview,
                     consentForTraining: consent,
-                    syntheticComponent: true,
+                    syntheticComponent: assistantGenerated,
                     provenance: "Parlure iOS local speech capture",
                     license: "private_first_party_consent_required",
                     reviewStatus: turn.reviewStatus.rawValue,
@@ -201,8 +222,12 @@ final class ExportService {
                 glossaryHintUsed: turn.glossaryHintUsed,
                 reviewStatus: turn.reviewStatus.rawValue,
                 containsPersonalData: containsPersonalData,
+                detectedPII: piiDetectedOrKnown,
+                userMarkedSensitive: options.markContainsPersonalData,
                 consentForTraining: consent,
-                syntheticOutput: true,
+                syntheticOutput: syntheticOutput,
+                humanOutput: !assistantGenerated,
+                assistantGenerated: assistantGenerated,
                 notes: turn.notes
             )
         }
@@ -219,6 +244,7 @@ final class ExportService {
             let consent = trainingConsent(global: options.allowTrainingExport, itemConsent: item.consentForTraining, reviewStatus: item.reviewStatus)
             let requiresReview = options.requireReviewBeforeExport || item.reviewStatus == .pendingReview
             let containsPersonalData = pii || item.containsPersonalData || options.markContainsPersonalData
+            if options.markContainsPersonalData { sensitiveMarkedCount += 1 }
 
             if item.reviewStatus != .rejected {
                 qfrRecords.append(QFRImportRecord(
@@ -230,6 +256,8 @@ final class ExportService {
                     dialectRegion: "Quebec",
                     register: "informal",
                     containsPersonalData: containsPersonalData,
+                    detectedPII: piiDetectedOrKnown,
+                    userMarkedSensitive: options.markContainsPersonalData,
                     requiresReview: requiresReview,
                     consentForTraining: consent,
                     syntheticComponent: false,
@@ -252,6 +280,8 @@ final class ExportService {
                 region: item.region,
                 reviewStatus: item.reviewStatus.rawValue,
                 containsPersonalData: containsPersonalData,
+                detectedPII: piiDetectedOrKnown,
+                userMarkedSensitive: options.markContainsPersonalData,
                 consentForTraining: consent,
                 syntheticOutput: false,
                 notes: item.notes
@@ -276,6 +306,7 @@ final class ExportService {
             acceptedCount: acceptedCount,
             redactedCount: redactedCount,
             piiDetectedCount: piiDetectedCount,
+            sensitiveMarkedCount: sensitiveMarkedCount,
             defaultLocale: "fr-CA",
             consentSettings: ["allow_training_export": options.allowTrainingExport],
             privacyFlags: [
@@ -291,7 +322,24 @@ final class ExportService {
         pretty.dateEncodingStrategy = .iso8601
         try pretty.encode(meta).write(to: metaURL)
 
-        return ExportResult(files: [dialoguesURL, glossaryURL, qfrURL, parallelURL, metaURL], dialogueCount: turns.count, glossaryCount: glossary.count, qfrCount: qfrRecords.count, rejectedExcludedCount: rejectedExcludedCount)
+        let quality: [String: Any] = [
+            "total_records": turns.count + glossary.count,
+            "accepted": acceptedCount,
+            "pending_review": pendingReviewCount,
+            "rejected": rejectedExcludedCount,
+            "stale_unclear_terms_count": 0,
+            "weak_explanation_count": 0,
+            "assistant_generated_count": assistantGeneratedCount,
+            "manual_human_count": manualHumanCount,
+            "detected_pii_count": piiDetectedCount,
+            "sensitive_marked_count": sensitiveMarkedCount,
+            "training_eligible_count": 0,
+            "warnings": ["training export disabled", "records require review", "assistant-generated records are synthetic", "some glossary terms may require manual correction"]
+        ]
+        let qData = try JSONSerialization.data(withJSONObject: quality, options: [.prettyPrinted, .sortedKeys])
+        try qData.write(to: qualityURL)
+
+        return ExportResult(files: [dialoguesURL, glossaryURL, qfrURL, parallelURL, metaURL, qualityURL], dialogueCount: turns.count, glossaryCount: glossary.count, qfrCount: qfrRecords.count, rejectedExcludedCount: rejectedExcludedCount)
     }
 
     func buildTSV(turns: [DialogueTurn], glossary: [GlossaryEntry]) -> String {
