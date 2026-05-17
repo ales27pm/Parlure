@@ -12,7 +12,7 @@ enum AssistantMessageDeduper {
         text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
     }
 
-    static func shouldAppend(lastRole: ChatRole?, lastAssistantNormalized: String?, candidateText: String) -> Bool {
+    static func shouldAppend(lastRole: ChatMessage.Role?, lastAssistantNormalized: String?, candidateText: String) -> Bool {
         let normalized = normalize(candidateText)
         guard !normalized.isEmpty else { return false }
         guard lastRole == .assistant else { return true }

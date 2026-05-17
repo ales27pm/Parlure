@@ -193,4 +193,9 @@ final class ParlureTests: XCTestCase {
         XCTAssertFalse(AssistantMessageDeduper.shouldAppend(lastRole: .assistant, lastAssistantNormalized: "Merci", candidateText: "Merci"))
         XCTAssertTrue(AssistantMessageDeduper.shouldAppend(lastRole: .user, lastAssistantNormalized: "Merci", candidateText: "Merci"))
     }
+
+    func testAssistantMessageDeduperRejectsEmptyAssistantText() {
+        XCTAssertFalse(AssistantMessageDeduper.shouldAppend(lastRole: .assistant, lastAssistantNormalized: "Merci", candidateText: "   \n\t"))
+        XCTAssertFalse(AssistantMessageDeduper.shouldAppend(lastRole: .user, lastAssistantNormalized: nil, candidateText: "  "))
+    }
 }

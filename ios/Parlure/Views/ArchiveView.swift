@@ -133,8 +133,9 @@ private struct GlossaryReviewRow: View {
     }
 }
 
+@MainActor
 private struct ShareSheet: UIViewControllerRepresentable {
     let items: [URL]
-    nonisolated func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: items, applicationActivities: nil) }
-    nonisolated func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+    func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: items, applicationActivities: nil) }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
