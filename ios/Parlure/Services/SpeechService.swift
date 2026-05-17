@@ -138,15 +138,17 @@ final class SpeechService: NSObject {
     private func scheduleTimers(sessionID: UUID, silenceThresholdMs: Int, maxSeconds: Int, onAutoStop: @escaping (String) -> Void) {
         silenceTimer?.invalidate()
         silenceTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            guard let service = self else { return }
             Task { @MainActor in
-                self?.handleSilenceTick(sessionID: sessionID, silenceThresholdMs: silenceThresholdMs, onAutoStop: onAutoStop)
+                service.handleSilenceTick(sessionID: sessionID, silenceThresholdMs: silenceThresholdMs, onAutoStop: onAutoStop)
             }
         }
 
         maxDurationTimer?.invalidate()
         maxDurationTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(maxSeconds), repeats: false) { [weak self] _ in
+            guard let service = self else { return }
             Task { @MainActor in
-                self?.handleMaxDuration(sessionID: sessionID, onAutoStop: onAutoStop)
+                service.handleMaxDuration(sessionID: sessionID, onAutoStop: onAutoStop)
             }
         }
     }
