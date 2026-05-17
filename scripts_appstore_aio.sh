@@ -86,13 +86,99 @@ validate_parent_writable() {
   [[ -w "$d" ]] || { err "Parent directory is not writable: $d (for $p)"; exit 1; }
 }
 
+expand_user_path() {
+  local p="$1"
+  case "$p" in
+    "~") printf '%s\n' "$HOME" ;;
+    "~/"*) printf '%s/%s\n' "$HOME" "${p#~/}" ;;
+    *) printf '%s\n' "$p" ;;
+  esac
+}
+
+absolute_path() {
+  local p="$1" dir base
+  if [[ "$p" = /* ]]; then
+    printf '%s\n' "$p"
+    return
+  fi
+
+  dir="$(dirname "$p")"
+  base="$(basename "$p")"
+  if [[ -d "$dir" ]]; then
+    printf '%s/%s\n' "$(cd "$dir" && pwd -P)" "$base"
+  else
+    printf '%s/%s\n' "$(pwd -P)" "$p"
+  fi
+}
+
+resolve_app_store_key_path() {
+  APP_STORE_KEY_PATH="$(expand_user_path "$APP_STORE_KEY_PATH")"
+  if [[ -d "$APP_STORE_KEY_PATH" ]]; then
+    APP_STORE_KEY_PATH="${APP_STORE_KEY_PATH%/}/AuthKey_${APP_STORE_KEY_ID}.p8"
+  fi
+  APP_STORE_KEY_PATH="$(absolute_path "$APP_STORE_KEY_PATH")"
+  validate_file_exists "$APP_STORE_KEY_PATH"
+}
+
 ensure_tools() {
   require_cmd xcodebuild
   require_cmd security
   require_cmd xcrun
   require_cmd find
-  # Check iTMSTransporter via xcrun (the same way it will be invoked)
-  xcrun -f iTMSTransporter >/dev/null 2>&1 || { err "iTMSTransporter not found via xcrun"; exit 1; }
+}
+
+find_transporter() {
+  local candidate
+  for candidate in \
+    "/Applications/Transporter.app/Contents/itms/bin/iTMSTransporter" \
+    "$(command -v iTMSTransporter 2>/dev/null || true)" \
+    "$(xcrun -f iTMSTransporter 2>/dev/null || true)"; do
+    [[ -n "$candidate" && -x "$candidate" ]] || continue
+    if "$candidate" -version >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 0
+}
+
+run_transporter_upload() {
+  local transporter="$1"
+  API_PRIVATE_KEYS_DIR="$(dirname "$APP_STORE_KEY_PATH")" \
+    "$transporter" -m upload \
+    -assetFile "$IPA_PATH" \
+    -apiKey "$APP_STORE_KEY_ID" \
+    -apiIssuer "$APP_STORE_ISSUER_ID" \
+    -v eXtreme
+}
+
+run_altool_upload() {
+  API_PRIVATE_KEYS_DIR="$(dirname "$APP_STORE_KEY_PATH")" \
+    xcrun altool --upload-app \
+    -f "$IPA_PATH" \
+    --api-key "$APP_STORE_KEY_ID" \
+    --api-issuer "$APP_STORE_ISSUER_ID" \
+    --p8-file-path "$APP_STORE_KEY_PATH" \
+    --verbose
+}
+
+run_app_store_upload() {
+  local transporter
+  transporter="$(find_transporter)"
+  if [[ -n "$transporter" ]]; then
+    log "Uploading with iTMSTransporter: $transporter"
+    run_transporter_upload "$transporter"
+    return
+  fi
+
+  if xcrun -f altool >/dev/null 2>&1; then
+    warn "Usable iTMSTransporter not found; falling back to xcrun altool."
+    run_altool_upload
+    return
+  fi
+
+  err "No usable App Store uploader found. Install Apple's Transporter app from the Mac App Store, then rerun publish."
+  exit 1
 }
 
 ensure_config_dir() {
@@ -161,7 +247,7 @@ write_export_options() {
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>method</key><string>app-store</string>
+  <key>method</key><string>app-store-connect</string>
   <key>signingStyle</key><string>automatic</string>
   <key>teamID</key><string>${TEAM_ID}</string>
   <key>stripSwiftSymbols</key><true/>
@@ -191,6 +277,7 @@ cmd_init() {
   prompt_if_empty APP_STORE_ISSUER_ID "App Store Connect Issuer ID"
   prompt_if_empty APP_STORE_KEY_PATH "Path to AuthKey_<KEYID>.p8"
   validate_team_id "$TEAM_ID"
+  resolve_app_store_key_path
   record_step "init: collect values"
 
   save_kv WORKSPACE "$WORKSPACE"; save_kv SCHEME "$SCHEME"; save_kv CONFIGURATION "$CONFIGURATION"
@@ -210,9 +297,13 @@ cmd_build() {
   prompt_if_empty SCHEME "Xcode scheme"
   prompt_if_empty CONFIGURATION "Build configuration" "Release"
   prompt_if_empty TEAM_ID "Apple Team ID"
+  prompt_if_empty APP_STORE_KEY_ID "App Store Connect API Key ID"
+  prompt_if_empty APP_STORE_ISSUER_ID "App Store Connect Issuer ID"
+  prompt_if_empty APP_STORE_KEY_PATH "Path to AuthKey_<KEYID>.p8"
   prompt_if_empty EXPORT_PATH "Export IPA directory" "build/export"
   prompt_if_empty ARCHIVE_PATH "Archive path" "build/Parlure.xcarchive"
   validate_team_id "$TEAM_ID"
+  resolve_app_store_key_path
   validate_path_exists "$WORKSPACE"
   validate_parent_writable "$ARCHIVE_PATH"
   validate_parent_writable "$EXPORT_PATH/.ipa-check"
@@ -222,6 +313,12 @@ cmd_build() {
   mkdir -p "$(dirname "$ARCHIVE_PATH")" "$EXPORT_PATH"
   write_export_options
   record_step "build: prep plist"
+
+  local -a xcode_auth_args=(
+    -authenticationKeyPath "$APP_STORE_KEY_PATH"
+    -authenticationKeyID "$APP_STORE_KEY_ID"
+    -authenticationKeyIssuerID "$APP_STORE_ISSUER_ID"
+  )
 
   xcodebuild -resolvePackageDependencies -workspace "$WORKSPACE" -scheme "$SCHEME"
   record_step "build: resolve deps"
@@ -233,13 +330,16 @@ cmd_build() {
     -archivePath "$ARCHIVE_PATH" \
     -destination generic/platform=iOS \
     -allowProvisioningUpdates \
+    "${xcode_auth_args[@]}" \
     DEVELOPMENT_TEAM="$TEAM_ID"
   record_step "build: archive"
 
   xcodebuild -exportArchive \
     -archivePath "$ARCHIVE_PATH" \
     -exportOptionsPlist "$EXPORT_OPTIONS_PLIST" \
-    -exportPath "$EXPORT_PATH"
+    -exportPath "$EXPORT_PATH" \
+    -allowProvisioningUpdates \
+    "${xcode_auth_args[@]}"
   record_step "build: export"
 
   # Pick the newest IPA by modification time (robust against stale builds)
@@ -256,19 +356,14 @@ cmd_publish() {
   prompt_if_empty APP_STORE_KEY_ID "App Store Connect API Key ID"
   prompt_if_empty APP_STORE_ISSUER_ID "App Store Connect Issuer ID"
   prompt_if_empty APP_STORE_KEY_PATH "Path to AuthKey_<KEYID>.p8"
-  validate_file_exists "$APP_STORE_KEY_PATH"
+  resolve_app_store_key_path
   record_step "publish: validate"
 
   IPA_PATH="$(ls -t "$EXPORT_PATH"/*.ipa 2>/dev/null | head -1 || true)"
   [[ -n "$IPA_PATH" ]] || { err "No IPA found in $EXPORT_PATH"; exit 1; }
   record_step "publish: locate ipa"
 
-  API_PRIVATE_KEYS_DIR="$(dirname "$APP_STORE_KEY_PATH")" \
-    xcrun iTMSTransporter -m upload \
-    -assetFile "$IPA_PATH" \
-    -apiKey "$APP_STORE_KEY_ID" \
-    -apiIssuer "$APP_STORE_ISSUER_ID" \
-    -v eXtreme
+  run_app_store_upload
   record_step "publish: upload"
 
   log "Publish submitted."
