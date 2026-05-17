@@ -91,7 +91,8 @@ ensure_tools() {
   require_cmd security
   require_cmd xcrun
   require_cmd find
-  require_cmd iTMSTransporter
+  # Check iTMSTransporter via xcrun (the same way it will be invoked)
+  xcrun -f iTMSTransporter >/dev/null 2>&1 || { err "iTMSTransporter not found via xcrun"; exit 1; }
 }
 
 ensure_config_dir() {
@@ -225,13 +226,24 @@ cmd_build() {
   xcodebuild -resolvePackageDependencies -workspace "$WORKSPACE" -scheme "$SCHEME"
   record_step "build: resolve deps"
 
-  xcodebuild archive -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration "$CONFIGURATION" -archivePath "$ARCHIVE_PATH" -destination generic/platform=iOS DEVELOPMENT_TEAM="$TEAM_ID"
+  xcodebuild archive \
+    -workspace "$WORKSPACE" \
+    -scheme "$SCHEME" \
+    -configuration "$CONFIGURATION" \
+    -archivePath "$ARCHIVE_PATH" \
+    -destination generic/platform=iOS \
+    -allowProvisioningUpdates \
+    DEVELOPMENT_TEAM="$TEAM_ID"
   record_step "build: archive"
 
-  xcodebuild -exportArchive -archivePath "$ARCHIVE_PATH" -exportOptionsPlist "$EXPORT_OPTIONS_PLIST" -exportPath "$EXPORT_PATH"
+  xcodebuild -exportArchive \
+    -archivePath "$ARCHIVE_PATH" \
+    -exportOptionsPlist "$EXPORT_OPTIONS_PLIST" \
+    -exportPath "$EXPORT_PATH"
   record_step "build: export"
 
-  IPA_PATH="$(find "$EXPORT_PATH" -maxdepth 1 -name '*.ipa' | head -n 1 || true)"
+  # Pick the newest IPA by modification time (robust against stale builds)
+  IPA_PATH="$(ls -t "$EXPORT_PATH"/*.ipa 2>/dev/null | head -1 || true)"
   [[ -n "$IPA_PATH" ]] || { err "No IPA found in $EXPORT_PATH"; exit 1; }
   log "IPA ready: $IPA_PATH"
   record_step "build: complete"
@@ -247,12 +259,16 @@ cmd_publish() {
   validate_file_exists "$APP_STORE_KEY_PATH"
   record_step "publish: validate"
 
-  IPA_PATH="$(find "$EXPORT_PATH" -maxdepth 1 -name '*.ipa' | head -n 1 || true)"
+  IPA_PATH="$(ls -t "$EXPORT_PATH"/*.ipa 2>/dev/null | head -1 || true)"
   [[ -n "$IPA_PATH" ]] || { err "No IPA found in $EXPORT_PATH"; exit 1; }
   record_step "publish: locate ipa"
 
   API_PRIVATE_KEYS_DIR="$(dirname "$APP_STORE_KEY_PATH")" \
-    xcrun iTMSTransporter -m upload -assetFile "$IPA_PATH" -apiKey "$APP_STORE_KEY_ID" -apiIssuer "$APP_STORE_ISSUER_ID" -v eXtreme
+    xcrun iTMSTransporter -m upload \
+    -assetFile "$IPA_PATH" \
+    -apiKey "$APP_STORE_KEY_ID" \
+    -apiIssuer "$APP_STORE_ISSUER_ID" \
+    -v eXtreme
   record_step "publish: upload"
 
   log "Publish submitted."
