@@ -38,6 +38,23 @@ final class SpeechService: NSObject {
     private var lastVoiceAt: Date?
     private var recordingSessionID: UUID?
     private var isProcessingStop = false
+    private var isStarting = false
+    private var interruptionObserver: NSObjectProtocol?
+    private var routeChangeObserver: NSObjectProtocol?
+
+    override init() {
+        super.init()
+        registerAudioSessionObservers()
+    }
+
+    deinit {
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+        }
+        if let routeChangeObserver {
+            NotificationCenter.default.removeObserver(routeChangeObserver)
+        }
+    }
 
     func requestPermissions() async throws {
         let speechStatus: SFSpeechRecognizerAuthorizationStatus = await withCheckedContinuation { cont in
@@ -55,7 +72,17 @@ final class SpeechService: NSObject {
     }
 
     func start(silenceThresholdMs: Int = 1200, maxSeconds: Int = 30, onAutoStop: @escaping (String) -> Void) async throws {
+        guard !isStarting else { throw SpeechServiceError.busy }
         guard !isRecording else { throw SpeechServiceError.busy }
+        isStarting = true
+        defer { isStarting = false }
+
+        if isProcessingStop {
+            _ = stopAndReturnTranscript()
+        } else {
+            cleanupAudioAndRecognition()
+        }
+
         try await requestPermissions()
         let sessionID = UUID()
         recordingSessionID = sessionID
@@ -69,6 +96,7 @@ final class SpeechService: NSObject {
         guard let recognizer = makeRecognizer(), recognizer.isAvailable else { throw SpeechServiceError.unavailable }
 
         try configureAudioSession()
+        try validateAudioInputAvailability()
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
@@ -77,15 +105,25 @@ final class SpeechService: NSObject {
         recognitionRequest = request
 
         let inputNode = audioEngine.inputNode
-        let format = inputNode.outputFormat(forBus: 0)
+        let format = try selectTapFormat(for: inputNode)
         inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self, request] buffer, _ in
-            request.append(buffer)
-            guard let self else { return }
-            let level = Self.computeLevel(from: buffer)
-            Task { @MainActor in
-                self.applyAudioLevel(level, sessionID: sessionID)
+        var tapError: NSError?
+        let tapInstalled = ObjCExceptionCatcher.tryBlock({
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self, request] buffer, _ in
+                request.append(buffer)
+                guard let self else { return }
+                let level = Self.computeLevel(from: buffer)
+                Task { @MainActor in
+                    self.applyAudioLevel(level, sessionID: sessionID)
+                }
             }
+        }, error: &tapError)
+
+        guard tapInstalled else {
+            cleanupAudioAndRecognition()
+            isRecording = false
+            isProcessingStop = false
+            throw SpeechServiceError.engine(tapError?.localizedDescription ?? "Impossible d’activer le micro")
         }
 
         audioEngine.prepare()
@@ -196,15 +234,67 @@ final class SpeechService: NSObject {
 
         if audioEngine.isRunning { audioEngine.stop() }
         audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngine.reset()
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         recordingSessionID = nil
+        audioLevel = 0
+        hasDetectedSpeech = false
+        lastVoiceAt = nil
     }
 
     private func configureAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker])
         try session.setActive(true, options: .notifyOthersOnDeactivation)
+    }
+
+    private func validateAudioInputAvailability() throws {
+        let session = AVAudioSession.sharedInstance()
+        guard session.recordPermission == .granted else {
+            throw SpeechServiceError.denied("Permission micro refusée")
+        }
+        guard session.isInputAvailable else {
+            throw SpeechServiceError.engine("Entrée micro indisponible")
+        }
+    }
+
+    private func selectTapFormat(for inputNode: AVAudioInputNode) throws -> AVAudioFormat {
+        let inputFormat = inputNode.inputFormat(forBus: 0)
+        if Self.isValidAudioFormat(inputFormat) {
+            return inputFormat
+        }
+
+        let outputFormat = inputNode.outputFormat(forBus: 0)
+        if Self.isValidAudioFormat(outputFormat) {
+            return outputFormat
+        }
+
+        cleanupAudioAndRecognition()
+        throw SpeechServiceError.engine("Format micro invalide")
+    }
+
+    nonisolated static func isValidAudioFormat(_ format: AVAudioFormat) -> Bool {
+        format.sampleRate > 0 && format.channelCount > 0
+    }
+
+    private func registerAudioSessionObservers() {
+        interruptionObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: AVAudioSession.sharedInstance(), queue: .main) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                _ = self.stopAndReturnTranscript()
+            }
+        }
+
+        routeChangeObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: AVAudioSession.sharedInstance(), queue: .main) { [weak self] notification in
+            guard let self else { return }
+            let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue ?? 0)
+            guard reason == .oldDeviceUnavailable || reason == .noSuitableRouteForCategory else { return }
+            Task { @MainActor in
+                _ = self.stopAndReturnTranscript()
+            }
+        }
     }
 
     nonisolated private static func computeLevel(from buffer: AVAudioPCMBuffer) -> Float {

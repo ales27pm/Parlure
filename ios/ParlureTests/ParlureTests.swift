@@ -117,6 +117,47 @@ final class ParlureTests: XCTestCase {
     }
 
     @MainActor
+    func testExportPendingRecordsRequireReviewAndDoNotCountAsAccepted() throws {
+        let turns = [
+            DialogueTurn(input: "bonjour", output: "salut", outputSource: .manual, reviewStatus: .pendingReview, consentForTraining: true)
+        ]
+        let glossary = [
+            GlossaryEntry(utterance: "char", unclearTerms: ["char"], explanation: "voiture", reviewStatus: .pendingReview, consentForTraining: true)
+        ]
+        let result = try ExportService.shared.export(turns: turns, glossary: glossary, options: .init(allowTrainingExport: true, markContainsPersonalData: false, requireReviewBeforeExport: true, exportRedactedText: false))
+
+        let metaURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_meta.json") }))
+        let meta = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: metaURL)) as? [String: Any])
+        XCTAssertEqual(meta["accepted_count"] as? Int, 0)
+        XCTAssertEqual(meta["pending_review_count"] as? Int, 2)
+
+        let qualityURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_quality_report.json") }))
+        let quality = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: qualityURL)) as? [String: Any])
+        XCTAssertEqual(quality["training_eligible_count"] as? Int, 0)
+
+        let qfrURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_qfr_import.jsonl") }))
+        let qfrLines = try String(contentsOf: qfrURL, encoding: .utf8).split(separator: "\n")
+        let decoder = JSONDecoder()
+        let qfrRecords = try qfrLines.map { try decoder.decode(QFRImportRecord.self, from: Data($0.utf8)) }
+        XCTAssertTrue(qfrRecords.allSatisfy { $0.requiresReview })
+        XCTAssertTrue(qfrRecords.allSatisfy { !$0.consentForTraining })
+    }
+
+    @MainActor
+    func testTrainingEligibilityRequiresAcceptedAndConsent() throws {
+        let turns = [
+            DialogueTurn(input: "a", output: "b", reviewStatus: .accepted, consentForTraining: true),
+            DialogueTurn(input: "c", output: "d", reviewStatus: .accepted, consentForTraining: false),
+            DialogueTurn(input: "e", output: "f", reviewStatus: .pendingReview, consentForTraining: true)
+        ]
+        let result = try ExportService.shared.export(turns: turns, glossary: [], options: .init(allowTrainingExport: true, markContainsPersonalData: false, requireReviewBeforeExport: false, exportRedactedText: false))
+        let qualityURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_quality_report.json") }))
+        let quality = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: qualityURL)) as? [String: Any])
+        XCTAssertEqual(quality["training_eligible_count"] as? Int, 1)
+        XCTAssertEqual(quality["accepted"] as? Int, 2)
+    }
+
+    @MainActor
     func testGlossaryRAGIgnoresUnrelatedCommonWords() {
         let rag = GlossaryRAG()
         rag.reload([
