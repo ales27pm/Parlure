@@ -39,8 +39,10 @@ final class SpeechService: NSObject {
     private var recordingSessionID: UUID?
     private var isProcessingStop = false
     private var isStarting = false
-    private var interruptionObserver: NSObjectProtocol?
-    private var routeChangeObserver: NSObjectProtocol?
+    @ObservationIgnored
+    private nonisolated(unsafe) var interruptionObserver: NSObjectProtocol?
+    @ObservationIgnored
+    private nonisolated(unsafe) var routeChangeObserver: NSObjectProtocol?
 
     override init() {
         super.init()
@@ -106,23 +108,22 @@ final class SpeechService: NSObject {
         let inputNode = audioEngine.inputNode
         let format = try selectTapFormat(for: inputNode)
         inputNode.removeTap(onBus: 0)
-        var tapError: NSError?
-        let tapInstalled = ObjCExceptionCatcher.tryBlock({
-            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self, request] buffer, _ in
-                request.append(buffer)
-                guard let self else { return }
-                let level = Self.computeLevel(from: buffer)
-                Task { @MainActor in
-                    self.applyAudioLevel(level, sessionID: sessionID)
+        do {
+            _ = try ObjCExceptionCatcher.`try` {
+                inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self, request] buffer, _ in
+                    request.append(buffer)
+                    guard let self else { return }
+                    let level = Self.computeLevel(from: buffer)
+                    Task { @MainActor in
+                        self.applyAudioLevel(level, sessionID: sessionID)
+                    }
                 }
             }
-        }, error: &tapError)
-
-        guard tapInstalled else {
+        } catch {
             cleanupAudioAndRecognition()
             isRecording = false
             isProcessingStop = false
-            throw SpeechServiceError.engine(tapError?.localizedDescription ?? "Impossible d’activer le micro")
+            throw SpeechServiceError.engine(error.localizedDescription)
         }
 
         audioEngine.prepare()
@@ -250,7 +251,7 @@ final class SpeechService: NSObject {
 
     private func validateAudioInputAvailability() throws {
         let session = AVAudioSession.sharedInstance()
-        guard session.recordPermission == .granted else {
+        guard AVAudioApplication.shared.recordPermission == .granted else {
             throw SpeechServiceError.denied("Permission micro refusée")
         }
         guard session.isInputAvailable else {
