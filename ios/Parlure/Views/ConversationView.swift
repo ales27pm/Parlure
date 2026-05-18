@@ -316,6 +316,10 @@ struct ConversationView: View {
             isStartingRecording = true
             try await Task.sleep(nanoseconds: 200_000_000)
             try Task.checkCancellation()
+            guard mode == .clarifying, pending != nil else {
+                isStartingRecording = false
+                return
+            }
             let recordingID = UUID()
             activeRecordingID = recordingID
             mode = .clarificationRecording
