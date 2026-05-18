@@ -43,6 +43,7 @@ struct ConversationView: View {
     @State private var activeRecordingID: UUID?
     @State private var processedRecordingIDs: Set<UUID> = []
     @State private var lastAssistantResponseNormalized: String?
+    @State private var isStartingRecording = false
 
     var body: some View {
         ZStack {
@@ -228,6 +229,7 @@ struct ConversationView: View {
                         .background(Theme.mapleRed)
                         .clipShape(.rect(cornerRadius: 14))
                 }
+                .disabled(isStartingRecording)
             }
         }
     }
@@ -311,6 +313,13 @@ struct ConversationView: View {
         guard mode == .clarifying else { return }
         do {
             TTSService.shared.stop()
+            isStartingRecording = true
+            try await Task.sleep(nanoseconds: 200_000_000)
+            try Task.checkCancellation()
+            guard mode == .clarifying, pending != nil else {
+                isStartingRecording = false
+                return
+            }
             let recordingID = UUID()
             activeRecordingID = recordingID
             mode = .clarificationRecording
@@ -318,9 +327,12 @@ struct ConversationView: View {
             try await speech.start(silenceThresholdMs: silenceMs, maxSeconds: maxSeconds) { text in
                 Task { await processClarification(text: text, recordingID: recordingID) }
             }
+            isStartingRecording = false
         } catch {
+            isStartingRecording = false
             mode = .clarifying
-            errorBanner = error.localizedDescription
+            statusText = "Aide-moi à comprendre"
+            errorBanner = "Le micro n’a pas pu démarrer. Réessaie dans une seconde."
         }
     }
 
@@ -361,8 +373,7 @@ struct ConversationView: View {
         let entry = GlossaryEntry(
             utterance: quality.cleanedUtterance,
             unclearTerms: quality.cleanedTerms,
-            explanation: quality.cleanedExplanation,
-            reviewStatus: .accepted
+            explanation: quality.cleanedExplanation
         )
         modelContext.insert(entry)
         do { try modelContext.save() } catch { errorBanner = error.localizedDescription }
@@ -372,7 +383,7 @@ struct ConversationView: View {
         if autoTTS { TTSService.shared.speak(thanks) }
 
         // Also persist as a dialogue turn for export
-        let turn = DialogueTurn(input: quality.cleanedUtterance, output: quality.cleanedExplanation, recognizerLocale: speech.recognizerLocale, outputSource: .manual, reviewStatus: .accepted, containsPersonalData: PIIRedactor.containsPII(text: quality.cleanedUtterance + " " + quality.cleanedExplanation))
+        let turn = DialogueTurn(input: quality.cleanedUtterance, output: quality.cleanedExplanation, recognizerLocale: speech.recognizerLocale, outputSource: .manual, reviewStatus: .pendingReview, containsPersonalData: PIIRedactor.containsPII(text: quality.cleanedUtterance + " " + quality.cleanedExplanation))
         modelContext.insert(turn)
         do { try modelContext.save() } catch { errorBanner = error.localizedDescription }
 

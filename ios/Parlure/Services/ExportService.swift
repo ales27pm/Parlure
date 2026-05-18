@@ -331,9 +331,13 @@ final class ExportService {
         try pretty.encode(meta).write(to: metaURL)
 
         let trainingEligibleCount = qfrRecords.filter(\.consentForTraining).count
+        let requiresReviewCount = qfrRecords.filter(\.requiresReview).count
         let qualityWarnings = [
             options.allowTrainingExport ? nil : "training export disabled",
-            pendingReviewCount > 0 ? "records require review" : nil,
+            pendingReviewCount > 0 ? "pending review records present" : nil,
+            trainingEligibleCount == 0 ? "no records are training eligible" : nil,
+            acceptedCount > 0 && options.requireReviewBeforeExport ? "all accepted records must be manually reviewed" : nil,
+            options.markContainsPersonalData ? "sensitive marking enabled" : nil,
             assistantGeneratedCount > 0 ? "assistant-generated records are synthetic" : nil,
             staleUnclearTermsCount > 0 || weakExplanationCount > 0 ? "some glossary terms may require manual correction" : nil
         ].compactMap { $0 }
@@ -350,6 +354,7 @@ final class ExportService {
             "detected_pii_count": piiDetectedCount,
             "sensitive_marked_count": sensitiveMarkedCount,
             "training_eligible_count": trainingEligibleCount,
+            "requires_review_count": requiresReviewCount,
             "warnings": qualityWarnings
         ]
         let qData = try JSONSerialization.data(withJSONObject: quality, options: [.prettyPrinted, .sortedKeys])
