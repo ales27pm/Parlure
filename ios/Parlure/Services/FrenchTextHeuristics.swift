@@ -1,14 +1,14 @@
 import Foundation
 
 enum FrenchTextHeuristics {
-    static let stopwords: Set<String> = [
+    nonisolated static let stopwords: Set<String> = [
         "je", "tu", "il", "elle", "on", "le", "la", "les", "un", "une", "des", "de", "du", "au", "aux",
         "à", "a", "est", "et", "ou", "pour", "avec", "dans", "sur", "en", "que", "qui",
         "c", "d", "j", "l", "m", "n", "qu", "s", "t",
         "c'est", "ça", "pis", "ben", "là", "oui", "non"
     ]
 
-    static func normalizedTokens(_ text: String, includeBigrams: Bool = false) -> [String] {
+    nonisolated static func normalizedTokens(_ text: String, includeBigrams: Bool = false) -> [String] {
         let apostropheNormalized = text
             .lowercased()
             .replacingOccurrences(of: "’", with: "'")
@@ -38,7 +38,7 @@ enum FrenchTextHeuristics {
         return tokens
     }
 
-    static func meaningfulTokens(_ text: String, includeBigrams: Bool = false) -> Set<String> {
+    nonisolated static func meaningfulTokens(_ text: String, includeBigrams: Bool = false) -> Set<String> {
         Set(
             normalizedTokens(text, includeBigrams: includeBigrams)
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

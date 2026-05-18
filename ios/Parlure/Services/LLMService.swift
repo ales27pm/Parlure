@@ -31,7 +31,7 @@ final class LLMService {
     @available(iOS 26.0, *)
     private func decideWithFM(history: [ChatMessage], userText: String, glossaryContext: GlossaryContext?) async -> LLMDecision? {
         guard SystemLanguageModel.default.isAvailable else { return nil }
-        let session = LanguageModelSession(instructions: { "Réponds en français québécois, court et naturel." })
+        let session = LanguageModelSession(instructions: { "Réponds en français québécois, court et naturel. Ne remplace pas débarrer par débarrasser. En contexte québécois, débarrer veut dire déverrouiller." })
         let context = history.suffix(6).map {
             "\($0.role == .user ? "U" : "A"): \($0.content)"
         }.joined(separator: "\n")
@@ -79,6 +79,13 @@ final class LLMService {
         }
 
         let lower = userText.lowercased()
+        if lower.contains("débarrer") && (lower.contains("porte") || lower.contains("char")) {
+            return .init(action: .answer, response: "Tu veux dire déverrouiller les portes du char?", unclearTerms: [], source: .heuristic)
+        }
+        if lower.contains("clé") && (lower.contains("barr") || lower.contains("porte")) {
+            return .init(action: .askClarify, response: "Ouin, ça sonne frustrant. Tu veux dire que t'as besoin de déverrouiller la porte?", unclearTerms: ["débarrer"], source: .heuristic)
+        }
+
         let idiomSignals = ["ça a pas d'allure", "pantoute", "char", "magasiner", "c'est rough", "donne-moi une break", "kit"]
         let matched = idiomSignals.filter { lower.contains($0) }
         if let first = matched.first {

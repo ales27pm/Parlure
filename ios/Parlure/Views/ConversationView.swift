@@ -283,7 +283,7 @@ struct ConversationView: View {
         let responseText = decision.response
 
         if decision.action == .askClarify {
-            pending = PendingClarification(utterance: text, terms: decision.unclearTerms)
+            pending = PendingClarification(utterance: text, terms: PendingClarification.resolvedTerms(utterance: text, detectedTerms: decision.unclearTerms), recordingID: recordingID)
             mode = .clarifying
             statusText = "Aide-moi à comprendre"
             appendAssistantMessageIfNeeded(responseText)
@@ -347,44 +347,52 @@ struct ConversationView: View {
             return
         }
         let validation = ClarificationValidator.validate(utterance: p.utterance, explanation: pendingExplanation)
-        guard validation.isValid else {
-            let retry = "Je l’ai pas assez clair encore. Peux-tu me l’expliquer avec d’autres mots, comme si tu l’expliquais à quelqu’un qui connaît pas l’expression?"
+        let quality = GlossaryQualityValidator.validate(utterance: p.utterance, explanation: pendingExplanation, unclearTerms: p.terms, detectedTerms: p.terms)
+        guard validation.isValid, quality.isValid else {
+            let retry = "Je pense que j’ai mal associé l’expression. Peux-tu me redire juste l’expression, puis me l’expliquer clairement?"
             appendAssistantMessageIfNeeded(retry)
             if autoTTS { TTSService.shared.speak(retry) }
             showConfirmSheet = false
+            pendingExplanation = ""
             mode = .clarifying
             statusText = "Aide-moi à comprendre"
             return
         }
         let entry = GlossaryEntry(
-            utterance: p.utterance,
-            unclearTerms: p.terms,
-            explanation: validation.cleanedExplanation
+            utterance: quality.cleanedUtterance,
+            unclearTerms: quality.cleanedTerms,
+            explanation: quality.cleanedExplanation,
+            reviewStatus: .accepted
         )
         modelContext.insert(entry)
         do { try modelContext.save() } catch { errorBanner = error.localizedDescription }
 
-        let thanks = "Merci ! Là je comprends mieux ce que tu veux dire par « \(p.utterance) » : \(validation.cleanedExplanation)"
+        let thanks = "Merci ! Là je comprends mieux ce que tu veux dire par « \(quality.cleanedUtterance) » : \(quality.cleanedExplanation)"
         appendAssistantMessageIfNeeded(thanks)
         if autoTTS { TTSService.shared.speak(thanks) }
 
         // Also persist as a dialogue turn for export
-        let turn = DialogueTurn(input: p.utterance, output: validation.cleanedExplanation, recognizerLocale: speech.recognizerLocale, outputSource: .manual, containsPersonalData: PIIRedactor.containsPII(text: p.utterance + " " + validation.cleanedExplanation))
+        let turn = DialogueTurn(input: quality.cleanedUtterance, output: quality.cleanedExplanation, recognizerLocale: speech.recognizerLocale, outputSource: .manual, reviewStatus: .accepted, containsPersonalData: PIIRedactor.containsPII(text: quality.cleanedUtterance + " " + quality.cleanedExplanation))
         modelContext.insert(turn)
         do { try modelContext.save() } catch { errorBanner = error.localizedDescription }
 
-        pending = nil
-        pendingExplanation = ""
+        resetPendingClarification()
         showConfirmSheet = false
         mode = .idle
         statusText = "Bien noté"
     }
 
     private func cancelClarification() {
-        pending = nil
-        pendingExplanation = ""
+        resetPendingClarification()
         mode = .idle
         statusText = "Prêt"
+    }
+
+
+    private func resetPendingClarification() {
+        pending = nil
+        pendingExplanation = ""
+        activeRecordingID = nil
     }
 
     private func appendAssistantMessageIfNeeded(_ text: String) {
