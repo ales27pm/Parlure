@@ -79,9 +79,8 @@ final class SpeechService: NSObject {
 
         if isProcessingStop {
             _ = stopAndReturnTranscript()
-        } else {
-            cleanupAudioAndRecognition()
         }
+        cleanupAudioAndRecognition()
 
         try await requestPermissions()
         let sessionID = UUID()

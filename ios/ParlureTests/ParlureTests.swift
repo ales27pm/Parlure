@@ -134,6 +134,7 @@ final class ParlureTests: XCTestCase {
         let qualityURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_quality_report.json") }))
         let quality = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: qualityURL)) as? [String: Any])
         XCTAssertEqual(quality["training_eligible_count"] as? Int, 0)
+        XCTAssertEqual(quality["requires_review_count"] as? Int, 2)
 
         let qfrURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_qfr_import.jsonl") }))
         let qfrLines = try String(contentsOf: qfrURL, encoding: .utf8).split(separator: "\n")

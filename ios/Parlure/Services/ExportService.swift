@@ -336,7 +336,7 @@ final class ExportService {
             options.allowTrainingExport ? nil : "training export disabled",
             pendingReviewCount > 0 ? "pending review records present" : nil,
             trainingEligibleCount == 0 ? "no records are training eligible" : nil,
-            acceptedCount > 0 && pendingReviewCount == 0 ? "all accepted records must be manually reviewed" : nil,
+            acceptedCount > 0 && options.requireReviewBeforeExport ? "all accepted records must be manually reviewed" : nil,
             options.markContainsPersonalData ? "sensitive marking enabled" : nil,
             assistantGeneratedCount > 0 ? "assistant-generated records are synthetic" : nil,
             staleUnclearTermsCount > 0 || weakExplanationCount > 0 ? "some glossary terms may require manual correction" : nil
