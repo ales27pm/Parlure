@@ -168,6 +168,8 @@ final class ExportService {
         var sensitiveMarkedCount = 0
         var assistantGeneratedCount = 0
         var manualHumanCount = 0
+        var staleUnclearTermsCount = 0
+        var weakExplanationCount = 0
 
         let dialogueRecords = turns.map { turn in
             let pii = PIIRedactor.containsPII(text: turn.input + " " + turn.output)
@@ -233,6 +235,10 @@ final class ExportService {
         }
 
         let glossaryRecords = glossary.map { item in
+            let quality = GlossaryQualityValidator.validate(utterance: item.utterance, explanation: item.explanation, unclearTerms: item.unclearTerms, detectedTerms: [])
+            if quality.staleTermsDetected { staleUnclearTermsCount += 1 }
+            if quality.weakExplanation { weakExplanationCount += 1 }
+
             let pii = PIIRedactor.containsPII(text: item.utterance + " " + item.explanation)
             let piiDetectedOrKnown = pii || item.containsPersonalData
             if piiDetectedOrKnown { piiDetectedCount += 1 }
@@ -324,19 +330,27 @@ final class ExportService {
         pretty.dateEncodingStrategy = .iso8601
         try pretty.encode(meta).write(to: metaURL)
 
+        let trainingEligibleCount = qfrRecords.filter(\.consentForTraining).count
+        let qualityWarnings = [
+            options.allowTrainingExport ? nil : "training export disabled",
+            pendingReviewCount > 0 ? "records require review" : nil,
+            assistantGeneratedCount > 0 ? "assistant-generated records are synthetic" : nil,
+            staleUnclearTermsCount > 0 || weakExplanationCount > 0 ? "some glossary terms may require manual correction" : nil
+        ].compactMap { $0 }
+
         let quality: [String: Any] = [
             "total_records": turns.count + glossary.count,
             "accepted": acceptedCount,
             "pending_review": pendingReviewCount,
             "rejected": rejectedExcludedCount,
-            "stale_unclear_terms_count": 0,
-            "weak_explanation_count": 0,
+            "stale_unclear_terms_count": staleUnclearTermsCount,
+            "weak_explanation_count": weakExplanationCount,
             "assistant_generated_count": assistantGeneratedCount,
             "manual_human_count": manualHumanCount,
             "detected_pii_count": piiDetectedCount,
             "sensitive_marked_count": sensitiveMarkedCount,
-            "training_eligible_count": 0,
-            "warnings": ["training export disabled", "records require review", "assistant-generated records are synthetic", "some glossary terms may require manual correction"]
+            "training_eligible_count": trainingEligibleCount,
+            "warnings": qualityWarnings
         ]
         let qData = try JSONSerialization.data(withJSONObject: quality, options: [.prettyPrinted, .sortedKeys])
         try qData.write(to: qualityURL)

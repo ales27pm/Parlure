@@ -73,6 +73,14 @@ final class ParlureTests: XCTestCase {
     }
 
     @MainActor
+    func testHeuristicDebarrerCharBypassesGenericCharClarification() {
+        let d = LLMService.shared.heuristicDecision(userText: "Je dois débarrer mon char")
+        XCTAssertEqual(d.action, .answer)
+        XCTAssertTrue(d.response.contains("déverrouiller"))
+        XCTAssertTrue(d.unclearTerms.isEmpty)
+    }
+
+    @MainActor
     func testExportFilenameUniqueness() throws {
         let turns = [DialogueTurn(input: "allo", output: "salut", reviewStatus: .accepted)]
         let glossary: [GlossaryEntry] = []
@@ -203,6 +211,21 @@ final class ParlureTests: XCTestCase {
         XCTAssertFalse(r2.isValid)
     }
 
+    func testGlossaryQualityRejectsDanglingTermsWithTrailingPunctuation() {
+        let result = GlossaryQualityValidator.validate(utterance: "Virer une brosse", explanation: "Ça veut dire boire beaucoup avec des amis parce que.", unclearTerms: ["Virer une brosse"], detectedTerms: [])
+        XCTAssertFalse(result.isValid)
+        XCTAssertTrue(result.weakExplanation)
+    }
+
+    func testGlossaryQualityMatchesUnclearTermsAsWholeTerms() {
+        let stale = GlossaryQualityValidator.validate(utterance: "Le charbon est dans le poêle", explanation: "Ça veut dire une voiture utilisée pour aller travailler.", unclearTerms: ["char"], detectedTerms: [])
+        XCTAssertFalse(stale.isValid)
+        XCTAssertTrue(stale.staleTermsDetected)
+
+        let wholeWord = GlossaryQualityValidator.validate(utterance: "Mon char est barré", explanation: "Ça veut dire une voiture utilisée pour aller travailler.", unclearTerms: ["char"], detectedTerms: [])
+        XCTAssertTrue(wholeWord.isValid)
+    }
+
     @MainActor
     func testExportManualVsSyntheticFlags() throws {
         let turns = [
@@ -240,6 +263,20 @@ final class ParlureTests: XCTestCase {
         XCTAssertEqual(object["synthetic_output"] as? Bool, false)
         XCTAssertEqual(object["human_output"] as? Bool, true)
         XCTAssertEqual(object["assistant_generated"] as? Bool, false)
+    }
+
+    @MainActor
+    func testQualityReportUsesActualEligibilityAndWarnings() throws {
+        let turns = [
+            DialogueTurn(input: "u", output: "h", outputSource: .manual, reviewStatus: .accepted, containsPersonalData: false, consentForTraining: true)
+        ]
+        let result = try ExportService.shared.export(turns: turns, glossary: [], options: .init(allowTrainingExport: true, markContainsPersonalData: false, requireReviewBeforeExport: false, exportRedactedText: false))
+
+        let qualityURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_quality_report.json") }))
+        let qualityData = try Data(contentsOf: qualityURL)
+        let quality = try XCTUnwrap(JSONSerialization.jsonObject(with: qualityData) as? [String: Any])
+        XCTAssertEqual(quality["training_eligible_count"] as? Int, 1)
+        XCTAssertEqual(quality["warnings"] as? [String], [])
     }
 
     func testAssistantMessageDeduperConsecutiveOnly() {

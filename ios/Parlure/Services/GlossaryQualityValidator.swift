@@ -23,17 +23,17 @@ enum GlossaryQualityValidator {
         }
 
         let lowerExp = cleanExplanation.lowercased()
+        let danglingComparable = lowerExp.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
         let meaningfulCount = FrenchTextHeuristics.meaningfulTokens(lowerExp).count
-        let weak = meaningfulCount < 5 || weakExact.contains(lowerExp) || dangling.contains(where: { lowerExp.hasSuffix(" \($0)") || lowerExp == $0 })
+        let weak = meaningfulCount < 5 || weakExact.contains(lowerExp) || dangling.contains(where: { danglingComparable.hasSuffix(" \($0)") || danglingComparable == $0 })
         guard !weak else {
             return .init(isValid: false, cleanedUtterance: cleanUtterance, cleanedExplanation: cleanExplanation, cleanedTerms: cleanTerms, weakExplanation: true, staleTermsDetected: false)
         }
 
-        let utteranceLower = cleanUtterance.lowercased()
-        let detected = Set(detectedTerms.map { normalized($0).lowercased() }.filter { !$0.isEmpty })
+        let detected = Set(detectedTerms.map(canonicalTermText).filter { !$0.isEmpty })
         let stale = cleanTerms.contains { t in
-            let lt = t.lowercased()
-            return !utteranceLower.contains(lt) && !detected.contains(lt)
+            let lt = canonicalTermText(t)
+            return !containsTerm(lt, in: cleanUtterance) && !detected.contains(lt)
         }
         guard !stale else {
             return .init(isValid: false, cleanedUtterance: cleanUtterance, cleanedExplanation: cleanExplanation, cleanedTerms: cleanTerms, weakExplanation: false, staleTermsDetected: true)
@@ -44,5 +44,19 @@ enum GlossaryQualityValidator {
 
     nonisolated static func normalized(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    }
+
+    nonisolated private static func canonicalTermText(_ text: String) -> String {
+        normalized(text).lowercased().replacingOccurrences(of: "’", with: "'")
+    }
+
+    nonisolated private static func containsTerm(_ term: String, in text: String) -> Bool {
+        guard !term.isEmpty else { return false }
+        let canonicalText = canonicalTermText(text)
+        let escaped = NSRegularExpression.escapedPattern(for: term)
+        let pattern = "(?<![\\p{L}\\p{N}'])\(escaped)(?![\\p{L}\\p{N}'])"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+        let range = NSRange(canonicalText.startIndex..<canonicalText.endIndex, in: canonicalText)
+        return regex.firstMatch(in: canonicalText, range: range) != nil
     }
 }
