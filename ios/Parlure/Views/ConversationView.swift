@@ -314,7 +314,8 @@ struct ConversationView: View {
         do {
             TTSService.shared.stop()
             isStartingRecording = true
-            try? await Task.sleep(nanoseconds: 200_000_000)
+            try await Task.sleep(nanoseconds: 200_000_000)
+            try Task.checkCancellation()
             let recordingID = UUID()
             activeRecordingID = recordingID
             mode = .clarificationRecording

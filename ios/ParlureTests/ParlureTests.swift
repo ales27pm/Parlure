@@ -158,6 +158,18 @@ final class ParlureTests: XCTestCase {
     }
 
     @MainActor
+    func testQualityWarningsAvoidPendingReviewDuplication() throws {
+        let turns = [DialogueTurn(input: "u", output: "o", reviewStatus: .pendingReview, consentForTraining: false)]
+        let result = try ExportService.shared.export(turns: turns, glossary: [], options: .init(allowTrainingExport: false, markContainsPersonalData: false, requireReviewBeforeExport: true, exportRedactedText: false))
+        let qualityURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_quality_report.json") }))
+        let quality = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: qualityURL)) as? [String: Any])
+        let warnings = try XCTUnwrap(quality["warnings"] as? [String])
+        XCTAssertTrue(warnings.contains("pending review records present"))
+        XCTAssertFalse(warnings.contains("records require review"))
+        XCTAssertFalse(warnings.contains("all accepted records must be manually reviewed"))
+    }
+
+    @MainActor
     func testGlossaryRAGIgnoresUnrelatedCommonWords() {
         let rag = GlossaryRAG()
         rag.reload([
