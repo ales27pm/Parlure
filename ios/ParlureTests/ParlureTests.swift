@@ -83,7 +83,7 @@ final class ParlureTests: XCTestCase {
 
     @MainActor
     func testMetaPIICountNotInflatedByGlobalMarking() throws {
-        let turns = [DialogueTurn(input: "texte neutre", output: "réponse neutre", containsPersonalData: false, reviewStatus: .accepted)]
+        let turns = [DialogueTurn(input: "texte neutre", output: "réponse neutre", reviewStatus: .accepted, containsPersonalData: false)]
         let glossary: [GlossaryEntry] = []
         let result = try ExportService.shared.export(turns: turns, glossary: glossary, options: .init(allowTrainingExport: false, markContainsPersonalData: true, requireReviewBeforeExport: false, exportRedactedText: false))
 
@@ -211,7 +211,7 @@ final class ParlureTests: XCTestCase {
         ]
         let result = try ExportService.shared.export(turns: turns, glossary: [], options: .init(markContainsPersonalData: false))
         let rawURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_dialogues.raw.jsonl") }))
-        let lines = try String(contentsOf: rawURL).split(separator: "\n").map(String.init)
+        let lines = try String(contentsOf: rawURL, encoding: .utf8).split(separator: "\n").map(String.init)
         let decoder = JSONDecoder()
         let records = try lines.map { try decoder.decode(DialogueRawExportRecord.self, from: Data($0.utf8)) }
         let manual = try XCTUnwrap(records.first(where: { $0.outputSource == "manual" }))
@@ -221,10 +221,25 @@ final class ParlureTests: XCTestCase {
         XCTAssertTrue(heuristic.syntheticOutput)
 
         let qfrURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_qfr_import.jsonl") }))
-        let qfrLines = try String(contentsOf: qfrURL).split(separator: "\n").map(String.init)
+        let qfrLines = try String(contentsOf: qfrURL, encoding: .utf8).split(separator: "\n").map(String.init)
         let qfr = try qfrLines.map { try decoder.decode(QFRImportRecord.self, from: Data($0.utf8)) }
         XCTAssertFalse(try XCTUnwrap(qfr.first(where: { $0.outputSource == "manual" })).syntheticComponent)
         XCTAssertTrue(try XCTUnwrap(qfr.first(where: { $0.outputSource == "heuristic" })).syntheticComponent)
+    }
+
+    @MainActor
+    func testGlossaryExportFlagsMarkManualHumanOutput() throws {
+        let glossary = [
+            GlossaryEntry(utterance: "char", unclearTerms: ["char"], explanation: "Une voiture.", source: .manual, reviewStatus: .accepted, containsPersonalData: false)
+        ]
+        let result = try ExportService.shared.export(turns: [], glossary: glossary, options: .init(markContainsPersonalData: false))
+
+        let rawURL = try XCTUnwrap(result.files.first(where: { $0.lastPathComponent.contains("_glossary.raw.jsonl") }))
+        let line = try XCTUnwrap(try String(contentsOf: rawURL, encoding: .utf8).split(separator: "\n").first)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        XCTAssertEqual(object["synthetic_output"] as? Bool, false)
+        XCTAssertEqual(object["human_output"] as? Bool, true)
+        XCTAssertEqual(object["assistant_generated"] as? Bool, false)
     }
 
     func testAssistantMessageDeduperConsecutiveOnly() {

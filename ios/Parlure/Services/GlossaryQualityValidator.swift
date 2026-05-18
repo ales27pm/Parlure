@@ -10,10 +10,10 @@ struct GlossaryQualityValidationResult {
 }
 
 enum GlossaryQualityValidator {
-    private static let weakExact = ["oui c'est ça", "je sais pas", "boire de l'alcool jusqu'à être sous"]
-    private static let dangling = ["donc", "jusqu'à", "parce que", "pis"]
+    nonisolated private static let weakExact = ["oui c'est ça", "je sais pas", "boire de l'alcool jusqu'à être sous"]
+    nonisolated private static let dangling = ["donc", "jusqu'à", "parce que", "pis"]
 
-    static func validate(utterance: String, explanation: String, unclearTerms: [String], detectedTerms: [String]) -> GlossaryQualityValidationResult {
+    nonisolated static func validate(utterance: String, explanation: String, unclearTerms: [String], detectedTerms: [String]) -> GlossaryQualityValidationResult {
         let cleanUtterance = normalized(utterance)
         let cleanExplanation = normalized(explanation)
         let cleanTerms = unclearTerms.map(normalized).filter { !$0.isEmpty }
@@ -42,7 +42,7 @@ enum GlossaryQualityValidator {
         return .init(isValid: true, cleanedUtterance: cleanUtterance, cleanedExplanation: cleanExplanation, cleanedTerms: cleanTerms, weakExplanation: false, staleTermsDetected: false)
     }
 
-    static func normalized(_ text: String) -> String {
+    nonisolated static func normalized(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
     }
 }

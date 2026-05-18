@@ -284,6 +284,8 @@ final class ExportService {
                 userMarkedSensitive: options.markContainsPersonalData,
                 consentForTraining: consent,
                 syntheticOutput: false,
+                humanOutput: true,
+                assistantGenerated: false,
                 notes: item.notes
             )
         }
