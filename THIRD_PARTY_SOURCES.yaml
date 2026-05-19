@@ -1,0 +1,62 @@
+kind: third_party_sources
+schema_version: "1.0"
+project: Parlure
+owner: ales27pm
+policy: >-
+  This registry tracks external tools, frameworks, datasets, models, and references.
+  Entries do not imply endorsement, affiliation, or permission. Data/model use must be
+  confirmed before public release, commercial training, redistribution, or publication.
+entries:
+  - id: apple_swiftui
+    name: SwiftUI
+    category: platform_framework
+    provider: Apple
+    role: iOS user interface framework
+    usage: runtime_dependency
+    contact_required: false
+    license_review_status: platform_terms_apply
+
+  - id: apple_swiftdata
+    name: SwiftData
+    category: platform_framework
+    provider: Apple
+    role: local persistence framework
+    usage: runtime_dependency
+    contact_required: false
+    license_review_status: platform_terms_apply
+
+  - id: apple_speech
+    name: Speech framework
+    category: platform_framework
+    provider: Apple
+    role: speech recognition for fr-CA/fr-FR capture
+    usage: runtime_dependency
+    contact_required: false
+    license_review_status: platform_terms_apply
+
+  - id: apple_avfoundation
+    name: AVFoundation
+    category: platform_framework
+    provider: Apple
+    role: microphone/audio capture
+    usage: runtime_dependency
+    contact_required: false
+    license_review_status: platform_terms_apply
+
+  - id: apple_foundationmodels
+    name: FoundationModels
+    category: platform_framework
+    provider: Apple
+    role: optional on-device language-model decision path when available
+    usage: optional_runtime_dependency
+    contact_required: false
+    license_review_status: platform_terms_apply
+
+  - id: qfr_pipeline
+    name: Quec-fr-CA-llm-training
+    category: connected_repository
+    provider: ales27pm
+    role: downstream validation, curation, training-pack, and governance pipeline
+    usage: export_target
+    contact_required: false
+    license_review_status: same_owner
