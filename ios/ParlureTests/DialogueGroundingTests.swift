@@ -62,4 +62,31 @@ final class DialogueGroundingTests: XCTestCase {
 
         XCTAssertTrue(QuebecFrenchHeuristics.isGrounded(grounded, in: "Ça marche pas pantoute"))
     }
+
+    @MainActor
+    func testRegressionGlossaryClarificationDoesNotContaminateUnrelatedUtterance() async {
+        let history = [
+            ChatMessage(role: .user, content: "C'est pas tes crisse d'affaire"),
+            ChatMessage(role: .assistant, content: "C’est quoi que ça veut dire pour toi?"),
+            ChatMessage(role: .user, content: "Ça veut dire que ça te regarde pas"),
+            ChatMessage(role: .assistant, content: "Merci, c’est noté: ça te regarde pas.")
+        ]
+
+        let glossary = GlossaryContext(
+            displayTerm: "crisse d'affaire",
+            utterance: "C'est pas tes crisse d'affaire",
+            explanation: "Ça veut dire que ça te regarde pas",
+            score: 0.92
+        )
+
+        let decision = await LLMService.shared.decide(
+            history: history,
+            userText: "Toi pis moi on va ben s'entendre d'après moi",
+            glossaryContext: glossary
+        )
+
+        XCTAssertEqual(decision.action, .answer)
+        XCTAssertFalse(decision.response.lowercased().contains("ça te regarde pas"))
+        XCTAssertFalse(decision.response.lowercased().contains("ca te regarde pas"))
+    }
 }

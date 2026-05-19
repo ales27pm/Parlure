@@ -14,6 +14,16 @@ struct GlossaryContext {
 }
 
 enum QuebecFrenchHeuristics {
+    static func isExplicitFollowUp(_ userText: String) -> Bool {
+        let lower = userText.lowercased()
+        let patterns = [
+            #"\bça\b"#, #"\bca\b"#, #"\bcette expression\b"#, #"\bce mot\b"#,
+            #"\btu veux dire\b"#, #"\bveut dire\b"#, #"\bça veut dire\b"#, #"\bca veut dire\b"#,
+            #"\bdans ce contexte\b"#, #"\bencore\b"#, #"\bet ça\??$"#, #"\bet ca\??$"#
+        ]
+        return patterns.contains { lower.range(of: $0, options: .regularExpression) != nil }
+    }
+
     static func directDecision(for userText: String) -> LLMDecision? {
         let lower = userText.lowercased()
 
@@ -79,6 +89,13 @@ enum QuebecFrenchHeuristics {
         }
 
         return true
+    }
+
+    static func hasLexicalOverlap(_ lhs: String, _ rhs: String) -> Bool {
+        let a = FrenchTextHeuristics.meaningfulTokens(lhs)
+        let b = FrenchTextHeuristics.meaningfulTokens(rhs)
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        return !a.intersection(b).isEmpty
     }
 
     private static func mentionsDebarrer(_ lower: String) -> Bool {
@@ -148,13 +165,33 @@ final class LLMService {
         if let direct = QuebecFrenchHeuristics.directDecision(for: userText) {
             return direct
         }
-        if let glossaryContext, !glossaryContext.explanation.isEmpty {
-            return heuristicDecision(userText: userText, glossaryContext: glossaryContext)
-        }
-        if #available(iOS 26.0, *), let fm = await decideWithFM(history: history, userText: userText, glossaryContext: glossaryContext), QuebecFrenchHeuristics.isGrounded(fm, in: userText) {
+        if #available(iOS 26.0, *), let fm = await decideWithFM(history: history, userText: userText, glossaryContext: glossaryContext), isAcceptableFoundationDecision(fm, history: history, userText: userText, glossaryContext: glossaryContext) {
             return fm
         }
         return heuristicDecision(userText: userText, glossaryContext: glossaryContext)
+    }
+
+    private func isAcceptableFoundationDecision(_ decision: LLMDecision, history: [ChatMessage], userText: String, glossaryContext: GlossaryContext?) -> Bool {
+        guard QuebecFrenchHeuristics.isGrounded(decision, in: userText) else { return false }
+
+        if decision.action == .answer {
+            if !QuebecFrenchHeuristics.hasLexicalOverlap(decision.response, userText) {
+                if let glossaryContext,
+                   AssistantMessageDeduper.normalize(decision.response) == AssistantMessageDeduper.normalize(glossaryContext.explanation) {
+                    return false
+                }
+
+                let recentAssistantResponses = history
+                    .filter { $0.role == .assistant }
+                    .suffix(3)
+                    .map { AssistantMessageDeduper.normalize($0.content) }
+                if recentAssistantResponses.contains(AssistantMessageDeduper.normalize(decision.response)) {
+                    return false
+                }
+            }
+        }
+
+        return true
     }
 
 #if canImport(FoundationModels)
@@ -165,8 +202,10 @@ final class LLMService {
             """
             Réponds en français québécois, court et naturel.
             La phrase courante de l’utilisateur est prioritaire sur l’historique.
+            Interprète d'abord la phrase courante toute seule. N'utilise l'historique que si l'utilisateur fait un suivi explicite (ex: "ça", "ce mot", "tu veux dire", "dans ce contexte").
             N’utilise jamais un mot ou une expression de l’historique comme terme à clarifier s’il n’apparaît pas dans la phrase courante.
             Ne reste pas accroché à une ancienne clarification.
+            Si ta réponse ressemble surtout à une ancienne réponse ou à une explication du glossaire sans overlap lexical clair avec la phrase courante, réponds plutôt de façon neutre à la phrase courante.
             Ne remplace pas débarrer par débarrasser. En contexte québécois, débarrer veut dire déverrouiller.
             Si la phrase contient une forme comme veux-tu, est-tu, marche-tu ou c’est-tu, explique que le deuxième tu / -tu est une particule interrogative québécoise.
             """
@@ -220,7 +259,9 @@ final class LLMService {
             return direct
         }
 
-        if let glossaryContext, !glossaryContext.explanation.isEmpty {
+        if let glossaryContext, !glossaryContext.explanation.isEmpty,
+           QuebecFrenchHeuristics.hasLexicalOverlap(userText, glossaryContext.utterance),
+           QuebecFrenchHeuristics.isExplicitFollowUp(userText) {
             let response = "Ah ok, je te suis. Ici, « \(glossaryContext.displayTerm) », c’est \(glossaryContext.explanation)."
             return .init(action: .answer, response: response, unclearTerms: [], source: .glossary)
         }

@@ -41,7 +41,8 @@ final class GlossaryRAG {
     }
 
     private func rebuild() {
-        docTerms = entries.map { tokenize([$0.utterance, $0.unclearTerms.joined(separator: " "), $0.explanation].joined(separator: " ")) }
+        // Keep retrieval grounded in the taught expression itself, not the explanation text.
+        docTerms = entries.map { tokenize([$0.utterance, $0.unclearTerms.joined(separator: " ")].joined(separator: " ")) }
         idf.removeAll()
         let n = Double(max(docTerms.count, 1))
         var df: [String: Int] = [:]
