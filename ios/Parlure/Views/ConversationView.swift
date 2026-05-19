@@ -277,7 +277,7 @@ struct ConversationView: View {
 
         let match = rag.bestMatch(for: text)
         let glossaryContext = match.flatMap { m in
-            rag.shouldUseGlossary(match: m, query: text)
+            rag.shouldUseGlossary(match: m, query: text) && QuebecFrenchHeuristics.isExplicitFollowUp(text)
             ? GlossaryContext(displayTerm: rag.displayTerm(for: m.entry), utterance: m.entry.utterance, explanation: m.entry.explanation, score: m.score)
             : nil
         }
